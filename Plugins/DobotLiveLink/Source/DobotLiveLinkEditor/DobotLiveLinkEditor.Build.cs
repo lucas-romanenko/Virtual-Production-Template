@@ -27,7 +27,10 @@ public class DobotLiveLinkEditor : ModuleRules
                 "InputCore",
                 "UnrealEd",
                 "PropertyEditor",
-                "LiveLinkEditor"
+                "LiveLinkEditor",
+                "WorkspaceMenuStructure",
+                "ToolMenus",
+                "EditorStyle"
             }
         );
 
