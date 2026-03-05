@@ -20,7 +20,6 @@ public:
 private:
 	FString IPAddress;
 	int32 Port;
-	bool bTestMode;
 	float DelayMs;
 	FString SubjectName;
 
@@ -29,7 +28,6 @@ private:
 	FReply OnCreateClicked();
 	void OnIPAddressChanged(const FText& NewText);
 	void OnPortChanged(const FText& NewText);
-	void OnTestModeChanged(ECheckBoxState NewState);
 	void OnDelayChanged(const FText& NewText);
 	void OnSubjectNameChanged(const FText& NewText);
 

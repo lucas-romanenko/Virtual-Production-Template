@@ -8,21 +8,19 @@
 
 #define LOCTEXT_NAMESPACE "DobotLiveLinkSource"
 
-FDobotLiveLinkSource::FDobotLiveLinkSource(FString InIPAddress, int32 InPort, bool bInTestMode, float InDelayMs, FString InSubjectName)
+FDobotLiveLinkSource::FDobotLiveLinkSource(FString InIPAddress, int32 InPort, float InDelayMs, FString InSubjectName)
 	: Client(nullptr)
 	, SourceGuid(FGuid::NewGuid())
 	, IPAddress(InIPAddress)
 	, Port(InPort)
-	, bTestMode(bInTestMode)
 	, DelayMs(InDelayMs)
 	, SubjectName(*InSubjectName)
 	, Socket(nullptr)
 	, Thread(nullptr)
 	, bIsRunning(false)
-	, TestModeTime(0.0)
 	, CurrentTransform(FTransform::Identity)
 {
-	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Source created - IP:%s Port:%d TestMode:%d Delay:%.0fms Subject:%s"), *IPAddress, Port, bTestMode, DelayMs, *SubjectName.ToString());
+	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Source created - IP:%s Port:%d Delay:%.0fms Subject:%s"), *IPAddress, Port, DelayMs, *SubjectName.ToString());
 	Thread = FRunnableThread::Create(this, TEXT("DobotLiveLinkSourceThread"));
 }
 
@@ -79,14 +77,6 @@ FText FDobotLiveLinkSource::GetSourceMachineName() const
 
 FText FDobotLiveLinkSource::GetSourceStatus() const
 {
-	if (bTestMode)
-	{
-		if (DelayMs > 0.0f)
-		{
-			return FText::Format(LOCTEXT("SourceStatus_TestDelay", "Test Mode | Delay: {0}ms"), FText::AsNumber((int32)DelayMs));
-		}
-		return LOCTEXT("SourceStatus_TestMode", "Test Mode Active");
-	}
 	if (bIsRunning)
 	{
 		if (DelayMs > 0.0f)
@@ -100,36 +90,33 @@ FText FDobotLiveLinkSource::GetSourceStatus() const
 
 bool FDobotLiveLinkSource::Init()
 {
-	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Init called, bTestMode=%d"), bTestMode);
+	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Init called"));
 	bIsRunning = true;
 
-	if (!bTestMode)
+	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+	Socket = SocketSubsystem->CreateSocket(NAME_Stream, TEXT("DobotSocket"), false);
+
+	if (Socket)
 	{
-		ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
-		Socket = SocketSubsystem->CreateSocket(NAME_Stream, TEXT("DobotSocket"), false);
+		TSharedRef<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
+		bool bIsValid;
+		Addr->SetIp(*IPAddress, bIsValid);
+		Addr->SetPort(Port);
 
-		if (Socket)
+		if (bIsValid && Socket->Connect(*Addr))
 		{
-			TSharedRef<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
-			bool bIsValid;
-			Addr->SetIp(*IPAddress, bIsValid);
-			Addr->SetPort(Port);
-
-			if (bIsValid && Socket->Connect(*Addr))
-			{
-				UE_LOG(LogTemp, Log, TEXT("Dobot LiveLink: Connected to %s:%d"), *IPAddress, Port);
-			}
-			else
-			{
-				UE_LOG(LogTemp, Error, TEXT("Dobot LiveLink: Failed to connect to %s:%d"), *IPAddress, Port);
-				return false;
-			}
+			UE_LOG(LogTemp, Log, TEXT("Dobot LiveLink: Connected to %s:%d"), *IPAddress, Port);
 		}
 		else
 		{
-			UE_LOG(LogTemp, Error, TEXT("Dobot LiveLink: Failed to create socket"));
+			UE_LOG(LogTemp, Error, TEXT("Dobot LiveLink: Failed to connect to %s:%d"), *IPAddress, Port);
 			return false;
 		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("Dobot LiveLink: Failed to create socket"));
+		return false;
 	}
 
 	return true;
@@ -166,14 +153,13 @@ bool FDobotLiveLinkSource::GetDelayedTransform(FTransform& OutTransform) const
 
 uint32 FDobotLiveLinkSource::Run()
 {
-	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Thread started, bTestMode=%d Delay=%.0fms Subject=%s"), bTestMode, DelayMs, *SubjectName.ToString());
+	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Thread started, Delay=%.0fms Subject=%s"), DelayMs, *SubjectName.ToString());
 	int32 FrameCount = 0;
 
 	while (bIsRunning)
 	{
 		float DeltaTime = 0.033f;
-		if (bTestMode) { UpdateTestMode(DeltaTime); }
-		else { UpdateLiveMode(); }
+		UpdateLiveMode();
 
 		double Now = FPlatformTime::Seconds();
 		TransformBuffer.Add(FTimestampedTransform(Now, CurrentTransform));
@@ -212,22 +198,6 @@ uint32 FDobotLiveLinkSource::Run()
 void FDobotLiveLinkSource::Stop()
 {
 	bIsRunning = false;
-}
-
-void FDobotLiveLinkSource::UpdateTestMode(float DeltaTime)
-{
-	TestModeTime += DeltaTime;
-
-	float X = FMath::Sin(FMath::DegreesToRadians(TestModeTime * 15.0f)) * 30.0f;
-	float Y = FMath::Cos(FMath::DegreesToRadians(TestModeTime * 10.0f)) * 10.0f;
-	float Z = FMath::Sin(FMath::DegreesToRadians(TestModeTime * 12.0f)) * 15.0f + 150.0f;
-	float Yaw = FMath::Sin(FMath::DegreesToRadians(TestModeTime * 8.0f)) * 10.0f;
-	float Pitch = FMath::Sin(FMath::DegreesToRadians(TestModeTime * 6.0f)) * 5.0f;
-
-	FVector Location(-Y - 330.0f, X, Z);
-	FRotator Rotation(Pitch, Yaw + 180.0f, 0.0f);
-
-	CurrentTransform = FTransform(Rotation, Location);
 }
 
 void FDobotLiveLinkSource::UpdateLiveMode()

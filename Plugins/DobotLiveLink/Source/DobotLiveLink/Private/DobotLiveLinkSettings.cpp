@@ -24,9 +24,8 @@ UDobotLiveLinkSettings::UDobotLiveLinkSettings()
 	, SubjectName(TEXT("DobotCamera"))
 	, bEnableTracking(false)
 	, TrackingDelayMs(0.0f)
-	, bTestMode(false)
-	, bOutputActive(false)
 	, bAutoConnect(false)
+	, bOutputActive(false)
 	, bIsConnected(false)
 {
 }
@@ -95,7 +94,6 @@ void UDobotLiveLinkSettings::ApplyToCamera()
 	ACineCameraActor* Camera = SelectedCamera.Get();
 	if (!Camera)
 	{
-		// Fallback: find first camera
 		TArray<ACineCameraActor*> Cameras = FindAllDobotCameras();
 		if (Cameras.Num() > 0)
 		{
@@ -175,7 +173,7 @@ bool UDobotLiveLinkSettings::ConnectToRobot()
 	ILiveLinkClient& LiveLinkClient = ModularFeatures.GetModularFeature<ILiveLinkClient>(ILiveLinkClient::ModularFeatureName);
 
 	TSharedPtr<FDobotLiveLinkSource> NewSource = MakeShared<FDobotLiveLinkSource>(
-		RobotIPAddress, RobotPort, bTestMode, TrackingDelayMs, SubjectName);
+		RobotIPAddress, RobotPort, TrackingDelayMs, SubjectName);
 
 	LiveLinkClient.AddSource(NewSource);
 
@@ -185,7 +183,6 @@ bool UDobotLiveLinkSettings::ConnectToRobot()
 	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Connected to %s:%d (Subject: %s)"),
 		*RobotIPAddress, RobotPort, *SubjectName);
 
-	// Save config so auto-connect works next time
 	SaveConfig();
 
 	return true;
@@ -208,11 +205,9 @@ void UDobotLiveLinkSettings::DisconnectFromRobot()
 
 bool UDobotLiveLinkSettings::StartDeckLinkOutput()
 {
-	// Find the Blackmagic Media Output asset
 	UWorld* World = GetEditorWorld();
 	if (!World) return false;
 
-	// Look for any MediaOutput asset that's loaded
 	UMediaOutput* MediaOutput = nullptr;
 	for (TObjectIterator<UMediaOutput> It; It; ++It)
 	{

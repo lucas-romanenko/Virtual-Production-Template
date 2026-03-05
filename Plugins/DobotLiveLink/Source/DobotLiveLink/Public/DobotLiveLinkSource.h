@@ -18,7 +18,7 @@ struct FTimestampedTransform
 class DOBOTLIVELINK_API FDobotLiveLinkSource : public ILiveLinkSource, public FRunnable
 {
 public:
-	FDobotLiveLinkSource(FString InIPAddress, int32 InPort, bool bInTestMode, float InDelayMs = 0.0f, FString InSubjectName = TEXT("DobotCamera1"));
+	FDobotLiveLinkSource(FString InIPAddress, int32 InPort, float InDelayMs = 0.0f, FString InSubjectName = TEXT("DobotCamera"));
 	virtual ~FDobotLiveLinkSource();
 
 	// ILiveLinkSource interface
@@ -35,7 +35,6 @@ public:
 	virtual void Stop() override;
 
 private:
-	void UpdateTestMode(float DeltaTime);
 	void UpdateLiveMode();
 	bool ParseDobotPacket(const TArray<uint8>& PacketData);
 	bool GetDelayedTransform(FTransform& OutTransform) const;
@@ -45,7 +44,6 @@ private:
 
 	FString IPAddress;
 	int32 Port;
-	bool bTestMode;
 	float DelayMs;
 	FName SubjectName;
 
@@ -53,7 +51,6 @@ private:
 	FRunnableThread* Thread;
 	FThreadSafeBool bIsRunning;
 
-	double TestModeTime;
 	FTransform CurrentTransform;
 
 	TArray<FTimestampedTransform> TransformBuffer;

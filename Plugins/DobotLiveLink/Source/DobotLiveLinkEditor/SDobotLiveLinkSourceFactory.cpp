@@ -1,7 +1,6 @@
 #include "SDobotLiveLinkSourceFactory.h"
 #include "DobotLiveLinkSource.h"
 #include "Widgets/Input/SButton.h"
-#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -17,7 +16,6 @@ void SDobotLiveLinkSourceFactory::Construct(const FArguments& InArgs)
 
 	IPAddress = TEXT("192.168.5.1");
 	Port = 30004;
-	bTestMode = true;
 	DelayMs = 0.0f;
 	SourceCounter++;
 	if (SourceCounter == 1)
@@ -77,28 +75,6 @@ void SDobotLiveLinkSourceFactory::Construct(const FArguments& InArgs)
 									SNew(SEditableTextBox)
 										.Text(FText::FromString(FString::FromInt(Port)))
 										.OnTextChanged(this, &SDobotLiveLinkSourceFactory::OnPortChanged)
-								]
-						]
-
-					// Test Mode Row
-					+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(2)
-						[
-							SNew(SHorizontalBox)
-								+ SHorizontalBox::Slot()
-								.FillWidth(0.4f)
-								.VAlign(VAlign_Center)
-								[
-									SNew(STextBlock)
-										.Text(LOCTEXT("TestMode", "Test Mode"))
-								]
-								+ SHorizontalBox::Slot()
-								.FillWidth(0.6f)
-								[
-									SNew(SCheckBox)
-										.IsChecked(bTestMode ? ECheckBoxState::Checked : ECheckBoxState::Unchecked)
-										.OnCheckStateChanged(this, &SDobotLiveLinkSourceFactory::OnTestModeChanged)
 								]
 						]
 
@@ -171,11 +147,6 @@ void SDobotLiveLinkSourceFactory::OnPortChanged(const FText& NewText)
 	if (Port <= 0) Port = 30004;
 }
 
-void SDobotLiveLinkSourceFactory::OnTestModeChanged(ECheckBoxState NewState)
-{
-	bTestMode = (NewState == ECheckBoxState::Checked);
-}
-
 void SDobotLiveLinkSourceFactory::OnDelayChanged(const FText& NewText)
 {
 	DelayMs = FCString::Atof(*NewText.ToString());
@@ -192,8 +163,8 @@ FReply SDobotLiveLinkSourceFactory::OnCreateClicked()
 {
 	if (OnConnectionSettingsAccepted.IsBound())
 	{
-		TSharedPtr<FDobotLiveLinkSource> Source = MakeShared<FDobotLiveLinkSource>(IPAddress, Port, bTestMode, DelayMs, SubjectName);
-		FString ConnectionString = FString::Printf(TEXT("%s:%d:%s:%.0f:%s"), *IPAddress, Port, bTestMode ? TEXT("true") : TEXT("false"), DelayMs, *SubjectName);
+		TSharedPtr<FDobotLiveLinkSource> Source = MakeShared<FDobotLiveLinkSource>(IPAddress, Port, DelayMs, SubjectName);
+		FString ConnectionString = FString::Printf(TEXT("%s:%d:%.0f:%s"), *IPAddress, Port, DelayMs, *SubjectName);
 		OnConnectionSettingsAccepted.Execute(Source, ConnectionString);
 	}
 	return FReply::Handled();
