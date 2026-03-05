@@ -7,6 +7,8 @@
 #include "Engine/World.h"
 #include "ILiveLinkClient.h"
 #include "Modules/ModuleManager.h"
+#include "MediaCapture.h"
+#include "MediaOutput.h"
 
 #if WITH_EDITOR
 #include "Editor.h"
@@ -24,6 +26,7 @@ UDobotLiveLinkSettings::UDobotLiveLinkSettings()
 	, TrackingDelayMs(0.0f)
 	, bTestMode(false)
 	, bOutputActive(false)
+	, bAutoConnect(false)
 	, bIsConnected(false)
 {
 }
@@ -41,18 +44,22 @@ void UDobotLiveLinkSettings::PostEditChangeProperty(FPropertyChangedEvent& Prope
 }
 #endif
 
-void UDobotLiveLinkSettings::ApplyToCamera()
+UWorld* GetEditorWorld()
 {
-	UWorld* World = nullptr;
-
 #if WITH_EDITOR
 	if (GEditor)
 	{
-		World = GEditor->GetEditorWorldContext().World();
+		return GEditor->GetEditorWorldContext().World();
 	}
 #endif
+	return nullptr;
+}
 
-	if (!World) return;
+TArray<ACineCameraActor*> UDobotLiveLinkSettings::FindAllDobotCameras() const
+{
+	TArray<ACineCameraActor*> Result;
+	UWorld* World = GetEditorWorld();
+	if (!World) return Result;
 
 	for (TActorIterator<ACineCameraActor> It(World); It; ++It)
 	{
@@ -60,73 +67,104 @@ void UDobotLiveLinkSettings::ApplyToCamera()
 		if (!CameraActor) continue;
 
 		UDobotLiveLinkCameraComponent* DobotComp = CameraActor->FindComponentByClass<UDobotLiveLinkCameraComponent>();
-		if (!DobotComp) continue;
-
-		UCineCameraComponent* CineComp = CameraActor->GetCineCameraComponent();
-		if (CineComp)
+		if (DobotComp)
 		{
-			CineComp->CurrentFocalLength = FocalLength;
-			CineComp->CurrentAperture = Aperture;
-
-			FCameraFilmbackSettings Filmback = CineComp->Filmback;
-			Filmback.SensorWidth = SensorWidth;
-			Filmback.SensorHeight = SensorHeight;
-			CineComp->Filmback = Filmback;
+			Result.Add(CameraActor);
 		}
+	}
 
+	return Result;
+}
+
+void UDobotLiveLinkSettings::SetSelectedCamera(ACineCameraActor* Camera)
+{
+	SelectedCamera = Camera;
+	if (Camera)
+	{
+		LoadFromCamera();
+	}
+}
+
+ACineCameraActor* UDobotLiveLinkSettings::GetSelectedCamera() const
+{
+	return SelectedCamera.Get();
+}
+
+void UDobotLiveLinkSettings::ApplyToCamera()
+{
+	ACineCameraActor* Camera = SelectedCamera.Get();
+	if (!Camera)
+	{
+		// Fallback: find first camera
+		TArray<ACineCameraActor*> Cameras = FindAllDobotCameras();
+		if (Cameras.Num() > 0)
+		{
+			Camera = Cameras[0];
+			SelectedCamera = Camera;
+		}
+	}
+
+	if (!Camera) return;
+
+	UCineCameraComponent* CineComp = Camera->GetCineCameraComponent();
+	if (CineComp)
+	{
+		CineComp->CurrentFocalLength = FocalLength;
+		CineComp->CurrentAperture = Aperture;
+
+		FCameraFilmbackSettings Filmback = CineComp->Filmback;
+		Filmback.SensorWidth = SensorWidth;
+		Filmback.SensorHeight = SensorHeight;
+		CineComp->Filmback = Filmback;
+	}
+
+	UDobotLiveLinkCameraComponent* DobotComp = Camera->FindComponentByClass<UDobotLiveLinkCameraComponent>();
+	if (DobotComp)
+	{
 		DobotComp->LiveLinkSubjectName = FName(*SubjectName);
 		DobotComp->bEnableTracking = bEnableTracking;
-
-		break;
 	}
 }
 
 void UDobotLiveLinkSettings::LoadFromCamera()
 {
-	UWorld* World = nullptr;
-
-#if WITH_EDITOR
-	if (GEditor)
+	ACineCameraActor* Camera = SelectedCamera.Get();
+	if (!Camera)
 	{
-		World = GEditor->GetEditorWorldContext().World();
-	}
-#endif
-
-	if (!World) return;
-
-	for (TActorIterator<ACineCameraActor> It(World); It; ++It)
-	{
-		ACineCameraActor* CameraActor = *It;
-		if (!CameraActor) continue;
-
-		UDobotLiveLinkCameraComponent* DobotComp = CameraActor->FindComponentByClass<UDobotLiveLinkCameraComponent>();
-		if (!DobotComp) continue;
-
-		UCineCameraComponent* CineComp = CameraActor->GetCineCameraComponent();
-		if (CineComp)
+		TArray<ACineCameraActor*> Cameras = FindAllDobotCameras();
+		if (Cameras.Num() > 0)
 		{
-			FocalLength = CineComp->CurrentFocalLength;
-			Aperture = CineComp->CurrentAperture;
-			SensorWidth = CineComp->Filmback.SensorWidth;
-			SensorHeight = CineComp->Filmback.SensorHeight;
+			Camera = Cameras[0];
+			SelectedCamera = Camera;
 		}
+	}
 
+	if (!Camera) return;
+
+	UCineCameraComponent* CineComp = Camera->GetCineCameraComponent();
+	if (CineComp)
+	{
+		FocalLength = CineComp->CurrentFocalLength;
+		Aperture = CineComp->CurrentAperture;
+		SensorWidth = CineComp->Filmback.SensorWidth;
+		SensorHeight = CineComp->Filmback.SensorHeight;
+	}
+
+	UDobotLiveLinkCameraComponent* DobotComp = Camera->FindComponentByClass<UDobotLiveLinkCameraComponent>();
+	if (DobotComp)
+	{
 		SubjectName = DobotComp->LiveLinkSubjectName.ToString();
 		bEnableTracking = DobotComp->bEnableTracking;
-
-		break;
 	}
 }
 
 bool UDobotLiveLinkSettings::ConnectToRobot()
 {
-	// Disconnect existing connection first
 	if (bIsConnected)
 	{
 		DisconnectFromRobot();
 	}
 
-	// Get the LiveLink client
 	IModularFeatures& ModularFeatures = IModularFeatures::Get();
 	if (!ModularFeatures.IsModularFeatureAvailable(ILiveLinkClient::ModularFeatureName))
 	{
@@ -136,19 +174,19 @@ bool UDobotLiveLinkSettings::ConnectToRobot()
 
 	ILiveLinkClient& LiveLinkClient = ModularFeatures.GetModularFeature<ILiveLinkClient>(ILiveLinkClient::ModularFeatureName);
 
-	// Create the Dobot source
 	TSharedPtr<FDobotLiveLinkSource> NewSource = MakeShared<FDobotLiveLinkSource>(
 		RobotIPAddress, RobotPort, bTestMode, TrackingDelayMs, SubjectName);
 
-	// Add the source to LiveLink - store as virtual source for disconnect
 	LiveLinkClient.AddSource(NewSource);
 
 	bIsConnected = true;
-	// Store source pointer for later removal
 	ConnectedSourcePtr = NewSource;
 
 	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Connected to %s:%d (Subject: %s)"),
 		*RobotIPAddress, RobotPort, *SubjectName);
+
+	// Save config so auto-connect works next time
+	SaveConfig();
 
 	return true;
 }
@@ -166,4 +204,64 @@ void UDobotLiveLinkSettings::DisconnectFromRobot()
 	bIsConnected = false;
 
 	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Disconnected from robot"));
+}
+
+bool UDobotLiveLinkSettings::StartDeckLinkOutput()
+{
+	// Find the Blackmagic Media Output asset
+	UWorld* World = GetEditorWorld();
+	if (!World) return false;
+
+	// Look for any MediaOutput asset that's loaded
+	UMediaOutput* MediaOutput = nullptr;
+	for (TObjectIterator<UMediaOutput> It; It; ++It)
+	{
+		if (It->GetName().Contains(TEXT("BMD")) || It->GetName().Contains(TEXT("Blackmagic")) || It->GetName().Contains(TEXT("LED")))
+		{
+			MediaOutput = *It;
+			break;
+		}
+	}
+
+	if (!MediaOutput)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Dobot Settings: No Blackmagic Media Output asset found"));
+		return false;
+	}
+
+	ActiveMediaCapture = MediaOutput->CreateMediaCapture();
+	if (!ActiveMediaCapture)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Dobot Settings: Failed to create media capture"));
+		return false;
+	}
+
+	FMediaCaptureOptions CaptureOptions;
+	ActiveMediaCapture->CaptureActiveSceneViewport(CaptureOptions);
+
+	bOutputActive = true;
+	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: DeckLink output started"));
+	return true;
+}
+
+void UDobotLiveLinkSettings::StopDeckLinkOutput()
+{
+	if (ActiveMediaCapture)
+	{
+		ActiveMediaCapture->StopCapture(false);
+		ActiveMediaCapture = nullptr;
+	}
+
+	bOutputActive = false;
+	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: DeckLink output stopped"));
+}
+
+void UDobotLiveLinkSettings::TryAutoConnect()
+{
+	if (!bAutoConnect) return;
+	if (bIsConnected) return;
+	if (RobotIPAddress.IsEmpty()) return;
+
+	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Auto-connecting to %s:%d..."), *RobotIPAddress, RobotPort);
+	ConnectToRobot();
 }

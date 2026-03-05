@@ -1,16 +1,25 @@
 #include "DobotLiveLinkEditor.h"
 #include "DobotLiveLinkSettings.h"
+#include "CineCameraActor.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSeparator.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SComboBox.h"
+#include "Widgets/Images/SImage.h"
 #include "Framework/Docking/TabManager.h"
 #include "PropertyEditorModule.h"
 #include "Modules/ModuleManager.h"
 #include "Styling/AppStyle.h"
 #include "ToolMenus.h"
+#include "TimerManager.h"
+#include "Engine/World.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "FDobotLiveLinkEditorModule"
 
@@ -45,6 +54,32 @@ void FDobotLiveLinkEditorModule::StartupModule()
 				);
 			}
 		}));
+
+	// Auto-connect after editor is fully loaded
+#if WITH_EDITOR
+	if (GEditor)
+	{
+		GEditor->GetTimerManager()->SetTimerForNextTick([this]()
+			{
+				UDobotLiveLinkSettings::Get()->TryAutoConnect();
+			});
+	}
+	else
+	{
+		// Editor not ready yet, defer
+		FCoreDelegates::OnPostEngineInit.AddLambda([this]()
+			{
+				// Give the editor a moment to fully initialize
+				if (GEditor)
+				{
+					GEditor->GetTimerManager()->SetTimer(AutoConnectTimerHandle, [this]()
+						{
+							UDobotLiveLinkSettings::Get()->TryAutoConnect();
+						}, 2.0f, false);
+				}
+			});
+	}
+#endif
 }
 
 void FDobotLiveLinkEditorModule::ShutdownModule()
@@ -57,8 +92,24 @@ void FDobotLiveLinkEditorModule::ShutdownModule()
 TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs& SpawnTabArgs)
 {
 	UDobotLiveLinkSettings* Settings = UDobotLiveLinkSettings::Get();
+
+	// Find cameras and populate list
+	CameraOptions.Empty();
+	TArray<ACineCameraActor*> Cameras = Settings->FindAllDobotCameras();
+	for (ACineCameraActor* Cam : Cameras)
+	{
+		CameraOptions.Add(MakeShared<FString>(Cam->GetActorLabel()));
+	}
+
+	// Auto-select first camera
+	if (Cameras.Num() > 0 && !Settings->GetSelectedCamera())
+	{
+		Settings->SetSelectedCamera(Cameras[0]);
+	}
+
 	Settings->LoadFromCamera();
 
+	// Details View
 	FPropertyEditorModule& PropertyEditorModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 
 	FDetailsViewArgs DetailsViewArgs;
@@ -72,8 +123,8 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 	TSharedRef<IDetailsView> DetailsView = PropertyEditorModule.CreateDetailView(DetailsViewArgs);
 	DetailsView->SetObject(Settings);
 
-	// Status text block - shared ptr so we can update it
-	TSharedPtr<STextBlock> StatusText;
+	// Store for refresh
+	CachedDetailsView = DetailsView;
 
 	return SNew(SDockTab)
 		.TabRole(ETabRole::NomadTab)
@@ -87,7 +138,7 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 						// Header
 						+ SVerticalBox::Slot()
 						.AutoHeight()
-						.Padding(0, 0, 0, 10)
+						.Padding(0, 0, 0, 5)
 						[
 							SNew(STextBlock)
 								.Text(LOCTEXT("PanelHeader", "Dobot LiveLink Settings"))
@@ -101,6 +152,92 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 							SNew(SSeparator)
 						]
 
+						// Camera selector row
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 10)
+						[
+							SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+								.AutoWidth()
+								.VAlign(VAlign_Center)
+								.Padding(0, 0, 10, 0)
+								[
+									SNew(STextBlock)
+										.Text(LOCTEXT("CameraLabel", "Active Camera:"))
+										.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+								]
+								+ SHorizontalBox::Slot()
+								.FillWidth(1.0f)
+								.VAlign(VAlign_Center)
+								.Padding(0, 0, 5, 0)
+								[
+									SAssignNew(CameraComboBox, SComboBox<TSharedPtr<FString>>)
+										.OptionsSource(&CameraOptions)
+										.OnSelectionChanged_Lambda([this, Settings, Cameras](TSharedPtr<FString> NewSelection, ESelectInfo::Type SelectInfo)
+											{
+												if (!NewSelection.IsValid()) return;
+												TArray<ACineCameraActor*> CurrentCameras = Settings->FindAllDobotCameras();
+												for (ACineCameraActor* Cam : CurrentCameras)
+												{
+													if (Cam->GetActorLabel() == *NewSelection)
+													{
+														Settings->SetSelectedCamera(Cam);
+														if (CachedDetailsView.IsValid())
+														{
+															CachedDetailsView.Pin()->SetObject(Settings, true);
+														}
+														break;
+													}
+												}
+											})
+										.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item)
+											{
+												return SNew(STextBlock).Text(FText::FromString(*Item));
+											})
+										.Content()
+										[
+											SNew(STextBlock)
+												.Text_Lambda([this, Settings]()
+													{
+														ACineCameraActor* Cam = Settings->GetSelectedCamera();
+														if (Cam)
+														{
+															return FText::FromString(Cam->GetActorLabel());
+														}
+														return LOCTEXT("NoCameraSelected", "No Camera Selected");
+													})
+										]
+								]
+							+ SHorizontalBox::Slot()
+								.AutoWidth()
+								[
+									SNew(SButton)
+										.Text(LOCTEXT("RefreshCameras", "Refresh"))
+										.OnClicked_Lambda([this, Settings]()
+											{
+												CameraOptions.Empty();
+												TArray<ACineCameraActor*> Cameras = Settings->FindAllDobotCameras();
+												for (ACineCameraActor* Cam : Cameras)
+												{
+													CameraOptions.Add(MakeShared<FString>(Cam->GetActorLabel()));
+												}
+												if (CameraComboBox.IsValid())
+												{
+													CameraComboBox->RefreshOptions();
+												}
+												return FReply::Handled();
+											})
+								]
+						]
+
+					+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 5)
+						[
+							SNew(SSeparator)
+						]
+
 						// Details View with all settings
 						+ SVerticalBox::Slot()
 						.AutoHeight()
@@ -108,7 +245,7 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 							DetailsView
 						]
 
-						// Connection section separator
+						// Connection section
 						+ SVerticalBox::Slot()
 						.AutoHeight()
 						.Padding(0, 10, 0, 5)
@@ -116,7 +253,6 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 							SNew(SSeparator)
 						]
 
-						// Connection header
 						+ SVerticalBox::Slot()
 						.AutoHeight()
 						.Padding(0, 0, 0, 5)
@@ -126,7 +262,7 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 								.Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
 						]
 
-						// Status row
+						// Connection status
 						+ SVerticalBox::Slot()
 						.AutoHeight()
 						.Padding(0, 0, 0, 5)
@@ -143,8 +279,27 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 								+ SHorizontalBox::Slot()
 								.AutoWidth()
 								.VAlign(VAlign_Center)
+								.Padding(0, 0, 5, 0)
 								[
-									SAssignNew(StatusText, STextBlock)
+									SNew(SBox)
+										.WidthOverride(12)
+										.HeightOverride(12)
+										[
+											SNew(SImage)
+												.ColorAndOpacity_Lambda([Settings]()
+													{
+														return Settings->IsConnected()
+															? FLinearColor::Green
+															: FLinearColor::Red;
+													})
+												.Image(FAppStyle::GetBrush("Icons.FilledCircle"))
+										]
+								]
+							+ SHorizontalBox::Slot()
+								.AutoWidth()
+								.VAlign(VAlign_Center)
+								[
+									SNew(STextBlock)
 										.Text_Lambda([Settings]()
 											{
 												return Settings->IsConnected()
@@ -195,6 +350,115 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 										.IsEnabled_Lambda([Settings]()
 											{
 												return Settings->IsConnected();
+											})
+								]
+						]
+
+					// DeckLink Output section
+					+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 15, 0, 5)
+						[
+							SNew(SSeparator)
+						]
+
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 5)
+						[
+							SNew(STextBlock)
+								.Text(LOCTEXT("DeckLinkHeader", "DeckLink Output"))
+								.Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
+						]
+
+						// DeckLink status
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 5)
+						[
+							SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+								.AutoWidth()
+								.VAlign(VAlign_Center)
+								.Padding(0, 0, 10, 0)
+								[
+									SNew(STextBlock)
+										.Text(LOCTEXT("OutputStatusLabel", "Output:"))
+								]
+								+ SHorizontalBox::Slot()
+								.AutoWidth()
+								.VAlign(VAlign_Center)
+								.Padding(0, 0, 5, 0)
+								[
+									SNew(SBox)
+										.WidthOverride(12)
+										.HeightOverride(12)
+										[
+											SNew(SImage)
+												.ColorAndOpacity_Lambda([Settings]()
+													{
+														return Settings->IsDeckLinkOutputActive()
+															? FLinearColor::Green
+															: FLinearColor::Red;
+													})
+												.Image(FAppStyle::GetBrush("Icons.FilledCircle"))
+										]
+								]
+							+ SHorizontalBox::Slot()
+								.AutoWidth()
+								.VAlign(VAlign_Center)
+								[
+									SNew(STextBlock)
+										.Text_Lambda([Settings]()
+											{
+												return Settings->IsDeckLinkOutputActive()
+													? LOCTEXT("OutputActive", "Active")
+													: LOCTEXT("OutputInactive", "Inactive");
+											})
+										.ColorAndOpacity_Lambda([Settings]()
+											{
+												return Settings->IsDeckLinkOutputActive()
+													? FSlateColor(FLinearColor::Green)
+													: FSlateColor(FLinearColor::Red);
+											})
+								]
+						]
+
+					// DeckLink Start / Stop buttons
+					+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 5, 0, 10)
+						[
+							SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+								.AutoWidth()
+								.Padding(0, 0, 5, 0)
+								[
+									SNew(SButton)
+										.Text(LOCTEXT("StartOutputButton", "Start Output"))
+										.OnClicked_Lambda([Settings]()
+											{
+												Settings->StartDeckLinkOutput();
+												return FReply::Handled();
+											})
+										.IsEnabled_Lambda([Settings]()
+											{
+												return !Settings->IsDeckLinkOutputActive();
+											})
+								]
+							+ SHorizontalBox::Slot()
+								.AutoWidth()
+								[
+									SNew(SButton)
+										.Text(LOCTEXT("StopOutputButton", "Stop Output"))
+										.OnClicked_Lambda([Settings]()
+											{
+												Settings->StopDeckLinkOutput();
+												return FReply::Handled();
+											})
+										.IsEnabled_Lambda([Settings]()
+											{
+												return Settings->IsDeckLinkOutputActive();
 											})
 								]
 						]

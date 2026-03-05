@@ -4,6 +4,9 @@
 #include "UObject/NoExportTypes.h"
 #include "DobotLiveLinkSettings.generated.h"
 
+class ACineCameraActor;
+class UMediaCapture;
+
 UCLASS(config = DobotLiveLink, defaultconfig)
 class DOBOTLIVELINK_API UDobotLiveLinkSettings : public UObject
 {
@@ -29,6 +32,27 @@ public:
 
 	/** Check if currently connected */
 	bool IsConnected() const { return bIsConnected; }
+
+	/** Get all cameras with DobotLiveLinkCamera component in the level */
+	TArray<ACineCameraActor*> FindAllDobotCameras() const;
+
+	/** Set which camera to control */
+	void SetSelectedCamera(ACineCameraActor* Camera);
+
+	/** Get the currently selected camera */
+	ACineCameraActor* GetSelectedCamera() const;
+
+	/** Start DeckLink output from selected camera */
+	bool StartDeckLinkOutput();
+
+	/** Stop DeckLink output */
+	void StopDeckLinkOutput();
+
+	/** Check if DeckLink output is active */
+	bool IsDeckLinkOutputActive() const { return bOutputActive; }
+
+	/** Try to auto-connect using saved settings */
+	void TryAutoConnect();
 
 	// ---- Camera Settings ----
 
@@ -69,7 +93,17 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DeckLink Output", meta = (DisplayName = "Output Active"))
 	bool bOutputActive;
 
+	/** Auto-connect to robot on startup using saved settings */
+	UPROPERTY(config, EditAnywhere, BlueprintReadWrite, Category = "Tracking", meta = (DisplayName = "Auto-Connect on Startup"))
+	bool bAutoConnect;
+
 private:
 	bool bIsConnected;
 	TSharedPtr<class FDobotLiveLinkSource> ConnectedSourcePtr;
+
+	UPROPERTY(Transient)
+	TWeakObjectPtr<ACineCameraActor> SelectedCamera;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMediaCapture> ActiveMediaCapture;
 };

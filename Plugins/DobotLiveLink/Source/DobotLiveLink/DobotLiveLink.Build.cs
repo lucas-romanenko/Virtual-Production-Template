@@ -16,7 +16,8 @@ public class DobotLiveLink : ModuleRules
                 "LiveLinkInterface",
                 "Networking",
                 "Sockets",
-                "CinematicCamera"
+                "CinematicCamera",
+                "MediaIOCore"
             }
         );
 
