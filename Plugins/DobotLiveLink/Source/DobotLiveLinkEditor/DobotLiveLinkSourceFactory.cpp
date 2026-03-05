@@ -25,6 +25,8 @@ TSharedPtr<ILiveLinkSource> UDobotLiveLinkSourceFactory::CreateSource(const FStr
 	FString IPAddress = TEXT("192.168.5.1");
 	int32 Port = 30004;
 	bool bTestMode = true;
+	float DelayMs = 0.0f;
+	FString SubjectName = TEXT("DobotCamera1");
 
 	if (!ConnectionString.IsEmpty())
 	{
@@ -46,9 +48,20 @@ TSharedPtr<ILiveLinkSource> UDobotLiveLinkSourceFactory::CreateSource(const FStr
 		{
 			bTestMode = Parts[2].Equals(TEXT("true"), ESearchCase::IgnoreCase);
 		}
+
+		if (Parts.Num() >= 4)
+		{
+			DelayMs = FCString::Atof(*Parts[3]);
+			if (DelayMs < 0.0f) DelayMs = 0.0f;
+		}
+
+		if (Parts.Num() >= 5 && !Parts[4].IsEmpty())
+		{
+			SubjectName = Parts[4];
+		}
 	}
 
-	return MakeShared<FDobotLiveLinkSource>(IPAddress, Port, bTestMode);
+	return MakeShared<FDobotLiveLinkSource>(IPAddress, Port, bTestMode, DelayMs, SubjectName);
 }
 
 void UDobotLiveLinkSourceFactory::OnConnectionSettingsAccepted(TSharedPtr<ILiveLinkSource> Source, FString ConnectionString, FOnLiveLinkSourceCreated OnLiveLinkSourceCreated) const

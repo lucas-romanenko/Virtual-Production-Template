@@ -11,9 +11,6 @@ DerivedDataCache/
 *.VC.db
 *.VC.opendb
 
-# Content (optional - remove this line if you want to track content)
-Content/
-
 # OS
 Thumbs.db
 Desktop.ini

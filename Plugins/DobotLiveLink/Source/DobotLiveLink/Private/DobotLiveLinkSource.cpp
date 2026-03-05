@@ -8,19 +8,21 @@
 
 #define LOCTEXT_NAMESPACE "DobotLiveLinkSource"
 
-FDobotLiveLinkSource::FDobotLiveLinkSource(FString InIPAddress, int32 InPort, bool bInTestMode)
+FDobotLiveLinkSource::FDobotLiveLinkSource(FString InIPAddress, int32 InPort, bool bInTestMode, float InDelayMs, FString InSubjectName)
 	: Client(nullptr)
 	, SourceGuid(FGuid::NewGuid())
 	, IPAddress(InIPAddress)
 	, Port(InPort)
 	, bTestMode(bInTestMode)
+	, DelayMs(InDelayMs)
+	, SubjectName(*InSubjectName)
 	, Socket(nullptr)
 	, Thread(nullptr)
 	, bIsRunning(false)
 	, TestModeTime(0.0)
 	, CurrentTransform(FTransform::Identity)
 {
-	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Source created - IP:%s Port:%d TestMode:%d"), *IPAddress, Port, bTestMode);
+	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Source created - IP:%s Port:%d TestMode:%d Delay:%.0fms Subject:%s"), *IPAddress, Port, bTestMode, DelayMs, *SubjectName.ToString());
 	Thread = FRunnableThread::Create(this, TEXT("DobotLiveLinkSourceThread"));
 }
 
@@ -50,7 +52,7 @@ void FDobotLiveLinkSource::ReceiveClient(ILiveLinkClient* InClient, FGuid InSour
 	SourceGuid = InSourceGuid;
 
 	FLiveLinkStaticDataStruct StaticData(FLiveLinkTransformStaticData::StaticStruct());
-	Client->PushSubjectStaticData_AnyThread({ SourceGuid, TEXT("DobotCamera") }, ULiveLinkTransformRole::StaticClass(), MoveTemp(StaticData));
+	Client->PushSubjectStaticData_AnyThread({ SourceGuid, SubjectName }, ULiveLinkTransformRole::StaticClass(), MoveTemp(StaticData));
 	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Static data pushed"));
 }
 
@@ -79,9 +81,21 @@ FText FDobotLiveLinkSource::GetSourceStatus() const
 {
 	if (bTestMode)
 	{
+		if (DelayMs > 0.0f)
+		{
+			return FText::Format(LOCTEXT("SourceStatus_TestDelay", "Test Mode | Delay: {0}ms"), FText::AsNumber((int32)DelayMs));
+		}
 		return LOCTEXT("SourceStatus_TestMode", "Test Mode Active");
 	}
-	return bIsRunning ? LOCTEXT("SourceStatus_Active", "Active") : LOCTEXT("SourceStatus_Inactive", "Inactive");
+	if (bIsRunning)
+	{
+		if (DelayMs > 0.0f)
+		{
+			return FText::Format(LOCTEXT("SourceStatus_ActiveDelay", "Active | Delay: {0}ms"), FText::AsNumber((int32)DelayMs));
+		}
+		return LOCTEXT("SourceStatus_Active", "Active");
+	}
+	return LOCTEXT("SourceStatus_Inactive", "Inactive");
 }
 
 bool FDobotLiveLinkSource::Init()
@@ -121,52 +135,76 @@ bool FDobotLiveLinkSource::Init()
 	return true;
 }
 
+bool FDobotLiveLinkSource::GetDelayedTransform(FTransform& OutTransform) const
+{
+	if (TransformBuffer.Num() == 0) return false;
+	if (DelayMs <= 0.0f) { OutTransform = TransformBuffer.Last().Transform; return true; }
+
+	double DelaySeconds = DelayMs / 1000.0;
+	double TargetTime = FPlatformTime::Seconds() - DelaySeconds;
+
+	if (TargetTime <= TransformBuffer[0].Timestamp) { OutTransform = TransformBuffer[0].Transform; return true; }
+	if (TargetTime >= TransformBuffer.Last().Timestamp) { OutTransform = TransformBuffer.Last().Transform; return true; }
+
+	for (int32 i = TransformBuffer.Num() - 1; i > 0; --i)
+	{
+		if (TransformBuffer[i - 1].Timestamp <= TargetTime && TransformBuffer[i].Timestamp >= TargetTime)
+		{
+			double TimeRange = TransformBuffer[i].Timestamp - TransformBuffer[i - 1].Timestamp;
+			if (TimeRange <= 0.0) { OutTransform = TransformBuffer[i].Transform; return true; }
+
+			float Alpha = FMath::Clamp((float)((TargetTime - TransformBuffer[i - 1].Timestamp) / TimeRange), 0.0f, 1.0f);
+			FVector Loc = FMath::Lerp(TransformBuffer[i - 1].Transform.GetLocation(), TransformBuffer[i].Transform.GetLocation(), Alpha);
+			FQuat Rot = FQuat::Slerp(TransformBuffer[i - 1].Transform.GetRotation(), TransformBuffer[i].Transform.GetRotation(), Alpha);
+			OutTransform = FTransform(Rot, Loc, TransformBuffer[i - 1].Transform.GetScale3D());
+			return true;
+		}
+	}
+	OutTransform = TransformBuffer.Last().Transform;
+	return true;
+}
+
 uint32 FDobotLiveLinkSource::Run()
 {
-	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Thread started, bTestMode=%d"), bTestMode);
-
+	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Thread started, bTestMode=%d Delay=%.0fms Subject=%s"), bTestMode, DelayMs, *SubjectName.ToString());
 	int32 FrameCount = 0;
 
 	while (bIsRunning)
 	{
 		float DeltaTime = 0.033f;
+		if (bTestMode) { UpdateTestMode(DeltaTime); }
+		else { UpdateLiveMode(); }
 
-		if (bTestMode)
-		{
-			UpdateTestMode(DeltaTime);
-		}
-		else
-		{
-			UpdateLiveMode();
-		}
+		double Now = FPlatformTime::Seconds();
+		TransformBuffer.Add(FTimestampedTransform(Now, CurrentTransform));
+
+		double MaxHistory = (DelayMs / 1000.0) + 1.0;
+		while (TransformBuffer.Num() > 2 && (Now - TransformBuffer[0].Timestamp) > MaxHistory) { TransformBuffer.RemoveAt(0); }
+		while (TransformBuffer.Num() > MaxBufferSize) { TransformBuffer.RemoveAt(0); }
+
+		FTransform PushTransform;
+		if (!GetDelayedTransform(PushTransform)) { PushTransform = CurrentTransform; }
 
 		if (Client)
 		{
 			FLiveLinkFrameDataStruct FrameData(FLiveLinkTransformFrameData::StaticStruct());
 			FLiveLinkTransformFrameData* TransformData = FrameData.Cast<FLiveLinkTransformFrameData>();
-			TransformData->Transform = CurrentTransform;
-
-			Client->PushSubjectFrameData_AnyThread({ SourceGuid, TEXT("DobotCamera") }, MoveTemp(FrameData));
+			TransformData->Transform = PushTransform;
+			Client->PushSubjectFrameData_AnyThread({ SourceGuid, SubjectName }, MoveTemp(FrameData));
 
 			if (FrameCount < 3)
 			{
-				UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Frame %d pushed - Loc: %s"), FrameCount, *CurrentTransform.GetLocation().ToString());
+				UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Frame %d pushed - Loc: %s"), FrameCount, *PushTransform.GetLocation().ToString());
 				FrameCount++;
 			}
 		}
 		else
 		{
 			static bool bLoggedOnce = false;
-			if (!bLoggedOnce)
-			{
-				UE_LOG(LogTemp, Error, TEXT("Dobot LiveLink: Client is NULL!"));
-				bLoggedOnce = true;
-			}
+			if (!bLoggedOnce) { UE_LOG(LogTemp, Error, TEXT("Dobot LiveLink: Client is NULL!")); bLoggedOnce = true; }
 		}
-
 		FPlatformProcess::Sleep(DeltaTime);
 	}
-
 	UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Thread stopped"));
 	return 0;
 }

@@ -6,10 +6,19 @@
 #include "HAL/ThreadSafeBool.h"
 #include "Networking.h"
 
+struct FTimestampedTransform
+{
+	double Timestamp;
+	FTransform Transform;
+
+	FTimestampedTransform() : Timestamp(0.0), Transform(FTransform::Identity) {}
+	FTimestampedTransform(double InTime, const FTransform& InTransform) : Timestamp(InTime), Transform(InTransform) {}
+};
+
 class DOBOTLIVELINK_API FDobotLiveLinkSource : public ILiveLinkSource, public FRunnable
 {
 public:
-	FDobotLiveLinkSource(FString InIPAddress, int32 InPort, bool bInTestMode);
+	FDobotLiveLinkSource(FString InIPAddress, int32 InPort, bool bInTestMode, float InDelayMs = 0.0f, FString InSubjectName = TEXT("DobotCamera1"));
 	virtual ~FDobotLiveLinkSource();
 
 	// ILiveLinkSource interface
@@ -29,6 +38,7 @@ private:
 	void UpdateTestMode(float DeltaTime);
 	void UpdateLiveMode();
 	bool ParseDobotPacket(const TArray<uint8>& PacketData);
+	bool GetDelayedTransform(FTransform& OutTransform) const;
 
 	ILiveLinkClient* Client;
 	FGuid SourceGuid;
@@ -36,6 +46,8 @@ private:
 	FString IPAddress;
 	int32 Port;
 	bool bTestMode;
+	float DelayMs;
+	FName SubjectName;
 
 	FSocket* Socket;
 	FRunnableThread* Thread;
@@ -43,4 +55,7 @@ private:
 
 	double TestModeTime;
 	FTransform CurrentTransform;
+
+	TArray<FTimestampedTransform> TransformBuffer;
+	static const int32 MaxBufferSize = 2048;
 };
