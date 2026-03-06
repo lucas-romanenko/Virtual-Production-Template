@@ -12,13 +12,12 @@ public:
 
 private:
 	TSharedRef<class SDockTab> OnSpawnTab(const class FSpawnTabArgs& SpawnTabArgs);
+	void RefreshCameraList();
+
 	static const FName TabName;
 
 	// Camera selector
 	TArray<TSharedPtr<FString>> CameraOptions;
 	TSharedPtr<SComboBox<TSharedPtr<FString>>> CameraComboBox;
 	TWeakPtr<class IDetailsView> CachedDetailsView;
-
-	// Auto-connect timer
-	FTimerHandle AutoConnectTimerHandle;
 };

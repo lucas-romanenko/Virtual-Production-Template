@@ -1,12 +1,9 @@
 #include "DobotLiveLinkSettings.h"
 #include "DobotLiveLinkCameraComponent.h"
-#include "DobotLiveLinkSource.h"
 #include "CineCameraComponent.h"
 #include "CineCameraActor.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
-#include "ILiveLinkClient.h"
-#include "Modules/ModuleManager.h"
 #include "MediaCapture.h"
 #include "MediaOutput.h"
 
@@ -19,14 +16,7 @@ UDobotLiveLinkSettings::UDobotLiveLinkSettings()
 	, Aperture(2.8f)
 	, SensorWidth(36.0f)
 	, SensorHeight(24.0f)
-	, RobotIPAddress(TEXT("192.168.5.1"))
-	, RobotPort(30004)
-	, SubjectName(TEXT("DobotCamera"))
-	, bEnableTracking(false)
-	, TrackingDelayMs(0.0f)
-	, bAutoConnect(false)
 	, bOutputActive(false)
-	, bIsConnected(false)
 {
 }
 
@@ -39,11 +29,11 @@ UDobotLiveLinkSettings* UDobotLiveLinkSettings::Get()
 void UDobotLiveLinkSettings::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
-	ApplyToCamera();
+	ApplyCameraSettings();
 }
 #endif
 
-UWorld* GetEditorWorld()
+static UWorld* GetEditorWorld()
 {
 #if WITH_EDITOR
 	if (GEditor)
@@ -80,7 +70,7 @@ void UDobotLiveLinkSettings::SetSelectedCamera(ACineCameraActor* Camera)
 	SelectedCamera = Camera;
 	if (Camera)
 	{
-		LoadFromCamera();
+		LoadCameraSettings();
 	}
 }
 
@@ -89,19 +79,16 @@ ACineCameraActor* UDobotLiveLinkSettings::GetSelectedCamera() const
 	return SelectedCamera.Get();
 }
 
-void UDobotLiveLinkSettings::ApplyToCamera()
+UDobotLiveLinkCameraComponent* UDobotLiveLinkSettings::GetSelectedDobotComponent() const
 {
 	ACineCameraActor* Camera = SelectedCamera.Get();
-	if (!Camera)
-	{
-		TArray<ACineCameraActor*> Cameras = FindAllDobotCameras();
-		if (Cameras.Num() > 0)
-		{
-			Camera = Cameras[0];
-			SelectedCamera = Camera;
-		}
-	}
+	if (!Camera) return nullptr;
+	return Camera->FindComponentByClass<UDobotLiveLinkCameraComponent>();
+}
 
+void UDobotLiveLinkSettings::ApplyCameraSettings()
+{
+	ACineCameraActor* Camera = SelectedCamera.Get();
 	if (!Camera) return;
 
 	UCineCameraComponent* CineComp = Camera->GetCineCameraComponent();
@@ -115,28 +102,11 @@ void UDobotLiveLinkSettings::ApplyToCamera()
 		Filmback.SensorHeight = SensorHeight;
 		CineComp->Filmback = Filmback;
 	}
-
-	UDobotLiveLinkCameraComponent* DobotComp = Camera->FindComponentByClass<UDobotLiveLinkCameraComponent>();
-	if (DobotComp)
-	{
-		DobotComp->LiveLinkSubjectName = FName(*SubjectName);
-		DobotComp->bEnableTracking = bEnableTracking;
-	}
 }
 
-void UDobotLiveLinkSettings::LoadFromCamera()
+void UDobotLiveLinkSettings::LoadCameraSettings()
 {
 	ACineCameraActor* Camera = SelectedCamera.Get();
-	if (!Camera)
-	{
-		TArray<ACineCameraActor*> Cameras = FindAllDobotCameras();
-		if (Cameras.Num() > 0)
-		{
-			Camera = Cameras[0];
-			SelectedCamera = Camera;
-		}
-	}
-
 	if (!Camera) return;
 
 	UCineCameraComponent* CineComp = Camera->GetCineCameraComponent();
@@ -147,60 +117,6 @@ void UDobotLiveLinkSettings::LoadFromCamera()
 		SensorWidth = CineComp->Filmback.SensorWidth;
 		SensorHeight = CineComp->Filmback.SensorHeight;
 	}
-
-	UDobotLiveLinkCameraComponent* DobotComp = Camera->FindComponentByClass<UDobotLiveLinkCameraComponent>();
-	if (DobotComp)
-	{
-		SubjectName = DobotComp->LiveLinkSubjectName.ToString();
-		bEnableTracking = DobotComp->bEnableTracking;
-	}
-}
-
-bool UDobotLiveLinkSettings::ConnectToRobot()
-{
-	if (bIsConnected)
-	{
-		DisconnectFromRobot();
-	}
-
-	IModularFeatures& ModularFeatures = IModularFeatures::Get();
-	if (!ModularFeatures.IsModularFeatureAvailable(ILiveLinkClient::ModularFeatureName))
-	{
-		UE_LOG(LogTemp, Error, TEXT("Dobot Settings: LiveLink client not available"));
-		return false;
-	}
-
-	ILiveLinkClient& LiveLinkClient = ModularFeatures.GetModularFeature<ILiveLinkClient>(ILiveLinkClient::ModularFeatureName);
-
-	TSharedPtr<FDobotLiveLinkSource> NewSource = MakeShared<FDobotLiveLinkSource>(
-		RobotIPAddress, RobotPort, TrackingDelayMs, SubjectName);
-
-	LiveLinkClient.AddSource(NewSource);
-
-	bIsConnected = true;
-	ConnectedSourcePtr = NewSource;
-
-	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Connected to %s:%d (Subject: %s)"),
-		*RobotIPAddress, RobotPort, *SubjectName);
-
-	SaveConfig();
-
-	return true;
-}
-
-void UDobotLiveLinkSettings::DisconnectFromRobot()
-{
-	if (!bIsConnected) return;
-
-	if (ConnectedSourcePtr.IsValid())
-	{
-		ConnectedSourcePtr->RequestSourceShutdown();
-		ConnectedSourcePtr.Reset();
-	}
-
-	bIsConnected = false;
-
-	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Disconnected from robot"));
 }
 
 bool UDobotLiveLinkSettings::StartDeckLinkOutput()
@@ -251,12 +167,47 @@ void UDobotLiveLinkSettings::StopDeckLinkOutput()
 	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: DeckLink output stopped"));
 }
 
-void UDobotLiveLinkSettings::TryAutoConnect()
+ACineCameraActor* UDobotLiveLinkSettings::SpawnDobotCamera()
 {
-	if (!bAutoConnect) return;
-	if (bIsConnected) return;
-	if (RobotIPAddress.IsEmpty()) return;
+	UWorld* World = GetEditorWorld();
+	if (!World) return nullptr;
 
-	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Auto-connecting to %s:%d..."), *RobotIPAddress, RobotPort);
-	ConnectToRobot();
+	// Spawn a CineCameraActor at origin
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Name = MakeUniqueObjectName(World, ACineCameraActor::StaticClass(), FName(TEXT("DobotTrackedCamera")));
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	ACineCameraActor* NewCamera = World->SpawnActor<ACineCameraActor>(ACineCameraActor::StaticClass(), FTransform::Identity, SpawnParams);
+	if (!NewCamera) return nullptr;
+
+	// Set a nice label
+	TArray<ACineCameraActor*> ExistingCameras = FindAllDobotCameras();
+	int32 CameraNum = ExistingCameras.Num() + 1;
+	FString Label = FString::Printf(TEXT("DobotCamera_%d"), CameraNum);
+	NewCamera->SetActorLabel(Label);
+
+	// Add DobotLiveLinkCamera component
+	UDobotLiveLinkCameraComponent* DobotComp = NewObject<UDobotLiveLinkCameraComponent>(NewCamera, UDobotLiveLinkCameraComponent::StaticClass(), FName(TEXT("DobotLiveLinkCamera")));
+	if (DobotComp)
+	{
+		DobotComp->RegisterComponent();
+		NewCamera->AddInstanceComponent(DobotComp);
+
+		// Set subject name based on camera number
+		if (CameraNum == 1)
+		{
+			DobotComp->LiveLinkSubjectName = FName(TEXT("DobotCamera"));
+		}
+		else
+		{
+			DobotComp->LiveLinkSubjectName = FName(*FString::Printf(TEXT("DobotCamera%d"), CameraNum));
+		}
+	}
+
+	// Select the new camera
+	SetSelectedCamera(NewCamera);
+
+	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Spawned new tracked camera '%s'"), *Label);
+
+	return NewCamera;
 }
