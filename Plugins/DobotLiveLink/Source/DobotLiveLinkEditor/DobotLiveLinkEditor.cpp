@@ -2,6 +2,7 @@
 #include "DobotLiveLinkSettings.h"
 #include "DobotLiveLinkCameraComponent.h"
 #include "CineCameraActor.h"
+#include "MediaOutput.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSeparator.h"
@@ -18,6 +19,11 @@
 #include "Modules/ModuleManager.h"
 #include "Styling/AppStyle.h"
 #include "ToolMenus.h"
+
+#if WITH_EDITOR
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Editor.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "FDobotLiveLinkEditorModule"
 
@@ -105,6 +111,147 @@ void FDobotLiveLinkEditorModule::RefreshCameraList()
 	{
 		CameraComboBox->RefreshOptions();
 	}
+
+	// Also refresh DeckLink camera options
+	DeckLinkCameraOptions.Empty();
+	DeckLinkCameraOptions.Add(MakeShared<FString>(TEXT("None")));
+	for (ACineCameraActor* Cam : Cameras)
+	{
+		UDobotLiveLinkCameraComponent* Comp = Cam->FindComponentByClass<UDobotLiveLinkCameraComponent>();
+		if (Comp)
+		{
+			DeckLinkCameraOptions.Add(MakeShared<FString>(Comp->LiveLinkSubjectName.ToString()));
+		}
+	}
+}
+
+TSharedRef<SVerticalBox> FDobotLiveLinkEditorModule::BuildDeckLinkPortRow(int32 PortIndex, UDobotLiveLinkSettings* Settings)
+{
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(0, 3)
+		[
+			SNew(SHorizontalBox)
+
+				// Port label
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(0, 0, 8, 0)
+				[
+					SNew(STextBlock)
+						.Text(FText::Format(LOCTEXT("PortLabel", "Port {0}:"), FText::AsNumber(PortIndex + 1)))
+						.Font(FCoreStyle::GetDefaultFontStyle("Bold", 9))
+				]
+
+				// Camera dropdown
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
+				.VAlign(VAlign_Center)
+				.Padding(0, 0, 5, 0)
+				[
+					SNew(SComboBox<TSharedPtr<FString>>)
+						.OptionsSource(&DeckLinkCameraOptions)
+						.OnSelectionChanged_Lambda([Settings, PortIndex](TSharedPtr<FString> NewSelection, ESelectInfo::Type SelectInfo)
+							{
+								if (!NewSelection.IsValid()) return;
+								FString Selected = *NewSelection;
+								Settings->SetPortCamera(PortIndex, Selected == TEXT("None") ? FString() : Selected);
+							})
+						.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item)
+							{
+								return SNew(STextBlock).Text(FText::FromString(*Item));
+							})
+						.Content()
+						[
+							SNew(STextBlock)
+								.Text_Lambda([Settings, PortIndex]()
+									{
+										FString CamName = Settings->GetPortCamera(PortIndex);
+										return CamName.IsEmpty() ? LOCTEXT("NoneSelected", "None") : FText::FromString(CamName);
+									})
+						]
+				]
+
+			// Status dot
+			+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(0, 0, 5, 0)
+				[
+					SNew(SBox)
+						.WidthOverride(10)
+						.HeightOverride(10)
+						[
+							SNew(SImage)
+								.ColorAndOpacity_Lambda([Settings, PortIndex]()
+									{
+										return Settings->IsPortActive(PortIndex) ? FLinearColor::Green : FLinearColor(0.3f, 0.3f, 0.3f);
+									})
+								.Image(FAppStyle::GetBrush("Icons.FilledCircle"))
+						]
+				]
+
+			// Start button
+			+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.Padding(0, 0, 2, 0)
+				[
+					SNew(SButton)
+						.Text(LOCTEXT("StartBtn", "Start"))
+						.OnClicked_Lambda([Settings, PortIndex]()
+							{
+								Settings->StartPortOutput(PortIndex);
+								return FReply::Handled();
+							})
+						.IsEnabled_Lambda([Settings, PortIndex]()
+							{
+								return !Settings->IsPortActive(PortIndex) && !Settings->GetPortCamera(PortIndex).IsEmpty();
+							})
+				]
+
+			// Stop button
+			+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.Padding(0, 0, 2, 0)
+				[
+					SNew(SButton)
+						.Text(LOCTEXT("StopBtn", "Stop"))
+						.OnClicked_Lambda([Settings, PortIndex]()
+							{
+								Settings->StopPortOutput(PortIndex);
+								return FReply::Handled();
+							})
+						.IsEnabled_Lambda([Settings, PortIndex]()
+							{
+								return Settings->IsPortActive(PortIndex);
+							})
+				]
+
+			// Open Settings button
+			+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(SButton)
+						.Text(LOCTEXT("SettingsBtn", "Settings"))
+						.OnClicked_Lambda([Settings, PortIndex]()
+							{
+#if WITH_EDITOR
+								UMediaOutput* Output = Settings->GetOutputAssetForPort(PortIndex);
+								if (!Output)
+								{
+									Output = Settings->CreateOutputAssetForPort(PortIndex);
+								}
+								if (Output && GEditor)
+								{
+									GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(Cast<UObject>(Output));
+								}
+#endif
+								return FReply::Handled();
+							})
+				]
+		];
 }
 
 TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs& SpawnTabArgs)
@@ -113,6 +260,9 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 
 	RefreshCameraList();
 	Settings->LoadCameraSettings();
+
+	// Ensure ActiveCaptures array is sized
+	Settings->SetNumOutputPorts(Settings->GetNumOutputPorts());
 
 	FPropertyEditorModule& PropertyEditorModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 
@@ -127,6 +277,19 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 	TSharedRef<IDetailsView> DetailsView = PropertyEditorModule.CreateDetailView(DetailsViewArgs);
 	DetailsView->SetObject(Settings);
 	CachedDetailsView = DetailsView;
+
+	// Build DeckLink port rows container
+	TSharedRef<SVerticalBox> DeckLinkPortsContainer = SNew(SVerticalBox);
+	DeckLinkPortsBox = DeckLinkPortsContainer;
+
+	for (int32 i = 0; i < Settings->GetNumOutputPorts(); i++)
+	{
+		DeckLinkPortsContainer->AddSlot()
+			.AutoHeight()
+			[
+				BuildDeckLinkPortRow(i, Settings)
+			];
+	}
 
 	return SNew(SDockTab)
 		.TabRole(ETabRole::NomadTab)
@@ -322,7 +485,7 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 							DetailsView
 						]
 
-						// ========== ROBOT CONNECTION ==========
+						// ========== DOBOT CONNECTION ==========
 						+ SVerticalBox::Slot()
 						.AutoHeight()
 						.Padding(0, 10, 0, 5)
@@ -650,7 +813,7 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 								]
 						]
 
-					// ========== DECKLINK OUTPUT ==========
+					// ========== DECKLINK OUTPUT (GLOBAL) ==========
 					+ SVerticalBox::Slot()
 						.AutoHeight()
 						.Padding(0, 15, 0, 5)
@@ -667,6 +830,7 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 								.Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
 						]
 
+						// Number of outputs
 						+ SVerticalBox::Slot()
 						.AutoHeight()
 						.Padding(0, 0, 0, 5)
@@ -677,63 +841,48 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 								.VAlign(VAlign_Center)
 								.Padding(0, 0, 10, 0)
 								[
-									SNew(STextBlock).Text(LOCTEXT("OutputLabel", "Output:"))
+									SNew(STextBlock).Text(LOCTEXT("NumOutputsLabel", "Number of Outputs:"))
 								]
 								+ SHorizontalBox::Slot()
 								.AutoWidth()
 								.VAlign(VAlign_Center)
-								.Padding(0, 0, 5, 0)
 								[
-									SNew(SBox)
-										.WidthOverride(12)
-										.HeightOverride(12)
-										[
-											SNew(SImage)
-												.ColorAndOpacity_Lambda([Settings]()
-													{
-														return Settings->IsDeckLinkOutputActive() ? FLinearColor::Green : FLinearColor::Red;
-													})
-												.Image(FAppStyle::GetBrush("Icons.FilledCircle"))
-										]
-								]
-							+ SHorizontalBox::Slot()
-								.AutoWidth()
-								.VAlign(VAlign_Center)
-								[
-									SNew(STextBlock)
-										.Text_Lambda([Settings]()
+									SNew(SSpinBox<int32>)
+										.MinValue(1)
+										.MaxValue(8)
+										.MinDesiredWidth(60)
+										.Value_Lambda([Settings]() -> int32
 											{
-												return Settings->IsDeckLinkOutputActive() ? LOCTEXT("OutActive", "Active") : LOCTEXT("OutInactive", "Inactive");
+												return Settings->GetNumOutputPorts();
 											})
-										.ColorAndOpacity_Lambda([Settings]()
+										.OnValueCommitted_Lambda([this, Settings](int32 NewValue, ETextCommit::Type CommitType)
 											{
-												return Settings->IsDeckLinkOutputActive() ? FSlateColor(FLinearColor::Green) : FSlateColor(FLinearColor::Red);
+												Settings->SetNumOutputPorts(NewValue);
+
+												// Rebuild port rows
+												if (DeckLinkPortsBox.IsValid())
+												{
+													TSharedPtr<SVerticalBox> Box = DeckLinkPortsBox.Pin();
+													Box->ClearChildren();
+													for (int32 i = 0; i < NewValue; i++)
+													{
+														Box->AddSlot()
+															.AutoHeight()
+															[
+																BuildDeckLinkPortRow(i, Settings)
+															];
+													}
+												}
 											})
 								]
 						]
 
+					// Port rows
 					+ SVerticalBox::Slot()
 						.AutoHeight()
 						.Padding(0, 5, 0, 10)
 						[
-							SNew(SHorizontalBox)
-								+ SHorizontalBox::Slot()
-								.AutoWidth()
-								.Padding(0, 0, 5, 0)
-								[
-									SNew(SButton)
-										.Text(LOCTEXT("StartOutput", "Start Output"))
-										.OnClicked_Lambda([Settings]() { Settings->StartDeckLinkOutput(); return FReply::Handled(); })
-										.IsEnabled_Lambda([Settings]() { return !Settings->IsDeckLinkOutputActive(); })
-								]
-								+ SHorizontalBox::Slot()
-								.AutoWidth()
-								[
-									SNew(SButton)
-										.Text(LOCTEXT("StopOutput", "Stop Output"))
-										.OnClicked_Lambda([Settings]() { Settings->StopDeckLinkOutput(); return FReply::Handled(); })
-										.IsEnabled_Lambda([Settings]() { return Settings->IsDeckLinkOutputActive(); })
-								]
+							DeckLinkPortsContainer
 						]
 				]
 		];
