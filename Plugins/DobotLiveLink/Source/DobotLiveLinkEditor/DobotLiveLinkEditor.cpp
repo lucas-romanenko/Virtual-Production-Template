@@ -286,7 +286,20 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 												UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
 												if (Comp && !Comp->IsRobotConnected())
 												{
-													Comp->LiveLinkSubjectName = FName(*NewText.ToString());
+													FString NewName = NewText.ToString();
+													if (Settings->IsSubjectNameAvailable(NewName, Comp))
+													{
+														Comp->LiveLinkSubjectName = FName(*NewName);
+													}
+													else
+													{
+														UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Subject name '%s' is already in use by another camera"), *NewName);
+														if (GEngine)
+														{
+															GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
+																FString::Printf(TEXT("Subject name '%s' is already in use"), *NewName));
+														}
+													}
 												}
 											})
 										.IsEnabled_Lambda([Settings]()

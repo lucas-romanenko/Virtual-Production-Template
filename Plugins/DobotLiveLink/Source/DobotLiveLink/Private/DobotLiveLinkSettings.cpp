@@ -167,12 +167,62 @@ void UDobotLiveLinkSettings::StopDeckLinkOutput()
 	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: DeckLink output stopped"));
 }
 
+FString UDobotLiveLinkSettings::GetNextAvailableSubjectName() const
+{
+	TArray<ACineCameraActor*> Cameras = FindAllDobotCameras();
+
+	// Collect all existing subject names
+	TSet<FString> UsedNames;
+	for (ACineCameraActor* Cam : Cameras)
+	{
+		UDobotLiveLinkCameraComponent* Comp = Cam->FindComponentByClass<UDobotLiveLinkCameraComponent>();
+		if (Comp)
+		{
+			UsedNames.Add(Comp->LiveLinkSubjectName.ToString());
+		}
+	}
+
+	// First camera gets "DobotCamera"
+	if (!UsedNames.Contains(TEXT("DobotCamera")))
+	{
+		return TEXT("DobotCamera");
+	}
+
+	// Find next available number
+	for (int32 i = 2; i < 100; i++)
+	{
+		FString Candidate = FString::Printf(TEXT("DobotCamera_%d"), i);
+		if (!UsedNames.Contains(Candidate))
+		{
+			return Candidate;
+		}
+	}
+
+	return TEXT("DobotCamera_New");
+}
+
+bool UDobotLiveLinkSettings::IsSubjectNameAvailable(const FString& Name, const UDobotLiveLinkCameraComponent* ExcludeComp) const
+{
+	TArray<ACineCameraActor*> Cameras = FindAllDobotCameras();
+	for (ACineCameraActor* Cam : Cameras)
+	{
+		UDobotLiveLinkCameraComponent* Comp = Cam->FindComponentByClass<UDobotLiveLinkCameraComponent>();
+		if (Comp && Comp != ExcludeComp)
+		{
+			if (Comp->LiveLinkSubjectName.ToString() == Name)
+			{
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 ACineCameraActor* UDobotLiveLinkSettings::SpawnDobotCamera()
 {
 	UWorld* World = GetEditorWorld();
 	if (!World) return nullptr;
 
-	// Spawn a CineCameraActor at origin
 	FActorSpawnParameters SpawnParams;
 	SpawnParams.Name = MakeUniqueObjectName(World, ACineCameraActor::StaticClass(), FName(TEXT("DobotTrackedCamera")));
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -180,11 +230,11 @@ ACineCameraActor* UDobotLiveLinkSettings::SpawnDobotCamera()
 	ACineCameraActor* NewCamera = World->SpawnActor<ACineCameraActor>(ACineCameraActor::StaticClass(), FTransform::Identity, SpawnParams);
 	if (!NewCamera) return nullptr;
 
-	// Set a nice label
-	TArray<ACineCameraActor*> ExistingCameras = FindAllDobotCameras();
-	int32 CameraNum = ExistingCameras.Num() + 1;
-	FString Label = FString::Printf(TEXT("DobotCamera_%d"), CameraNum);
-	NewCamera->SetActorLabel(Label);
+	// Get next available subject name
+	FString NextSubjectName = GetNextAvailableSubjectName();
+
+	// Set actor label to match subject name
+	NewCamera->SetActorLabel(NextSubjectName);
 
 	// Add DobotLiveLinkCamera component
 	UDobotLiveLinkCameraComponent* DobotComp = NewObject<UDobotLiveLinkCameraComponent>(NewCamera, UDobotLiveLinkCameraComponent::StaticClass(), FName(TEXT("DobotLiveLinkCamera")));
@@ -192,22 +242,12 @@ ACineCameraActor* UDobotLiveLinkSettings::SpawnDobotCamera()
 	{
 		DobotComp->RegisterComponent();
 		NewCamera->AddInstanceComponent(DobotComp);
-
-		// Set subject name based on camera number
-		if (CameraNum == 1)
-		{
-			DobotComp->LiveLinkSubjectName = FName(TEXT("DobotCamera"));
-		}
-		else
-		{
-			DobotComp->LiveLinkSubjectName = FName(*FString::Printf(TEXT("DobotCamera%d"), CameraNum));
-		}
+		DobotComp->LiveLinkSubjectName = FName(*NextSubjectName);
 	}
 
-	// Select the new camera
 	SetSelectedCamera(NewCamera);
 
-	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Spawned new tracked camera '%s'"), *Label);
+	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Spawned new tracked camera '%s'"), *NextSubjectName);
 
 	return NewCamera;
 }

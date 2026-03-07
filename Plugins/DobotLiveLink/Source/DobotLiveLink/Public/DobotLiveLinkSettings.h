@@ -48,6 +48,12 @@ public:
 	/** Spawn a new CineCameraActor with DobotLiveLinkCamera component in the level */
 	ACineCameraActor* SpawnDobotCamera();
 
+	/** Get next available subject name (DobotCamera, DobotCamera_2, etc.) */
+	FString GetNextAvailableSubjectName() const;
+
+	/** Check if a subject name is available (not used by another camera) */
+	bool IsSubjectNameAvailable(const FString& Name, const UDobotLiveLinkCameraComponent* ExcludeComp = nullptr) const;
+
 	// ---- Camera Settings (synced to selected camera) ----
 
 	UPROPERTY(config, EditAnywhere, BlueprintReadWrite, Category = "Camera Settings", meta = (DisplayName = "Focal Length (mm)", ClampMin = "4.0", ClampMax = "1000.0"))
