@@ -110,12 +110,14 @@ bool FDobotLiveLinkSource::Init()
 		else
 		{
 			UE_LOG(LogTemp, Error, TEXT("Dobot LiveLink: Failed to connect to %s:%d"), *IPAddress, Port);
+			bIsRunning = false;
 			return false;
 		}
 	}
 	else
 	{
 		UE_LOG(LogTemp, Error, TEXT("Dobot LiveLink: Failed to create socket"));
+		bIsRunning = false;
 		return false;
 	}
 
@@ -161,6 +163,9 @@ uint32 FDobotLiveLinkSource::Run()
 		float DeltaTime = 0.033f;
 		UpdateLiveMode();
 
+		// If UpdateLiveMode detected a disconnect, exit the loop
+		if (!bIsRunning) break;
+
 		double Now = FPlatformTime::Seconds();
 		TransformBuffer.Add(FTimestampedTransform(Now, CurrentTransform));
 
@@ -202,22 +207,48 @@ void FDobotLiveLinkSource::Stop()
 
 void FDobotLiveLinkSource::UpdateLiveMode()
 {
-	if (!Socket) return;
+	if (!Socket)
+	{
+		bIsRunning = false;
+		return;
+	}
+
+	// Check if socket is still connected
+	ESocketConnectionState ConnectionState = Socket->GetConnectionState();
+	if (ConnectionState == ESocketConnectionState::SCS_NotConnected)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Socket not connected - connection lost"));
+		bIsRunning = false;
+		return;
+	}
 
 	TArray<uint8> ReceivedData;
 	ReceivedData.SetNumUninitialized(1440);
 
 	int32 BytesRead = 0;
-	if (Socket->Recv(ReceivedData.GetData(), 1440, BytesRead))
+	bool bRecvOk = Socket->Recv(ReceivedData.GetData(), 1440, BytesRead);
+
+	if (!bRecvOk)
 	{
-		if (BytesRead == 1440)
-		{
-			ParseDobotPacket(ReceivedData);
-		}
-		else if (BytesRead > 0)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Partial packet received (%d bytes)"), BytesRead);
-		}
+		UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Socket recv failed - connection lost"));
+		bIsRunning = false;
+		return;
+	}
+
+	if (BytesRead == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Remote closed connection (0 bytes received)"));
+		bIsRunning = false;
+		return;
+	}
+
+	if (BytesRead == 1440)
+	{
+		ParseDobotPacket(ReceivedData);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Dobot LiveLink: Partial packet received (%d bytes)"), BytesRead);
 	}
 }
 

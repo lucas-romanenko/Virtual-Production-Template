@@ -78,6 +78,23 @@ void UDobotLiveLinkCameraComponent::ResetTrackingOrigin()
 	bHasRecordedStart = false;
 }
 
+EDobotConnectionState UDobotLiveLinkCameraComponent::GetConnectionState() const
+{
+	if (!bIsRobotConnected)
+	{
+		return EDobotConnectionState::NoConnection;
+	}
+
+	// Check if the source is still alive
+	if (ConnectedSource.IsValid() && ConnectedSource->IsSourceStillValid())
+	{
+		return EDobotConnectionState::Connected;
+	}
+
+	// We thought we were connected but the source died
+	return EDobotConnectionState::ConnectionLost;
+}
+
 bool UDobotLiveLinkCameraComponent::ConnectToRobot()
 {
 	if (bIsRobotConnected)
@@ -120,6 +137,8 @@ bool UDobotLiveLinkCameraComponent::ConnectToRobot()
 					&& OtherComp->LiveLinkSubjectName == LiveLinkSubjectName)
 				{
 					bSourceExists = true;
+					// Share the source reference so we can check its health
+					ConnectedSource = OtherComp->ConnectedSource;
 					UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Reusing existing source from %s for subject %s"),
 						*RobotIPAddress, *LiveLinkSubjectName.ToString());
 					break;
@@ -182,8 +201,6 @@ void UDobotLiveLinkCameraComponent::DisconnectFromRobot()
 	}
 
 	bIsRobotConnected = false;
-
-	// Auto-disable tracking on disconnect
 	bEnableTracking = false;
 	bHasRecordedStart = false;
 
@@ -200,6 +217,45 @@ void UDobotLiveLinkCameraComponent::TickComponent(float DeltaTime, ELevelTick Ti
 		if (CameraToControl)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Auto-found camera %s"), *CameraToControl->GetName());
+		}
+	}
+
+	// Check for connection lost and auto-cleanup
+	if (bIsRobotConnected)
+	{
+		EDobotConnectionState State = GetConnectionState();
+		if (State == EDobotConnectionState::ConnectionLost)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Connection lost to %s:%d"), *RobotIPAddress, RobotPort);
+
+			// Remove the dead source from LiveLink client
+			IModularFeatures& ModularFeatures = IModularFeatures::Get();
+			if (ModularFeatures.IsModularFeatureAvailable(ILiveLinkClient::ModularFeatureName))
+			{
+				ILiveLinkClient& LiveLinkClient = ModularFeatures.GetModularFeature<ILiveLinkClient>(ILiveLinkClient::ModularFeatureName);
+				TArray<FGuid> SourceGuids = LiveLinkClient.GetSources();
+				for (const FGuid& Guid : SourceGuids)
+				{
+					FText SourceMachine = LiveLinkClient.GetSourceMachineName(Guid);
+					if (SourceMachine.ToString() == RobotIPAddress)
+					{
+						LiveLinkClient.RemoveSource(Guid);
+						UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Removed dead source from LiveLink"));
+						break;
+					}
+				}
+			}
+
+			bIsRobotConnected = false;
+			bEnableTracking = false;
+			bHasRecordedStart = false;
+			ConnectedSource.Reset();
+
+			if (GEngine)
+			{
+				GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Orange,
+					FString::Printf(TEXT("Dobot Connection Lost: %s:%d"), *RobotIPAddress, RobotPort));
+			}
 		}
 	}
 

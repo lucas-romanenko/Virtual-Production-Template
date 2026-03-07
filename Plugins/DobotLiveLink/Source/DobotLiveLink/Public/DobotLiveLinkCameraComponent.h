@@ -7,6 +7,14 @@
 
 class FDobotLiveLinkSource;
 
+UENUM(BlueprintType)
+enum class EDobotConnectionState : uint8
+{
+	NoConnection		UMETA(DisplayName = "No Connection"),
+	Connected			UMETA(DisplayName = "Connected"),
+	ConnectionLost		UMETA(DisplayName = "Connection Lost")
+};
+
 UCLASS(ClassGroup = (LiveLink), meta = (BlueprintSpawnableComponent))
 class DOBOTLIVELINK_API UDobotLiveLinkCameraComponent : public UActorComponent
 {
@@ -59,9 +67,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Robot Connection")
 	bool IsRobotConnected() const { return bIsRobotConnected; }
 
-	void FindCamera();
+	/** Get the current connection health state */
+	UFUNCTION(BlueprintCallable, Category = "Robot Connection")
+	EDobotConnectionState GetConnectionState() const;
 
-	/** Reset tracking start position on next tick */
+	void FindCamera();
 	void ResetTrackingOrigin();
 
 protected:
