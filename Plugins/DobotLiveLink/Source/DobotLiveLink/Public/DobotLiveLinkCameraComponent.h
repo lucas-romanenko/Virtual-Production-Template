@@ -12,7 +12,8 @@ enum class EDobotConnectionState : uint8
 {
 	NoConnection		UMETA(DisplayName = "No Connection"),
 	Connected			UMETA(DisplayName = "Connected"),
-	ConnectionLost		UMETA(DisplayName = "Connection Lost")
+	ConnectionLost		UMETA(DisplayName = "Connection Lost"),
+	Reconnecting		UMETA(DisplayName = "Reconnecting")
 };
 
 UCLASS(ClassGroup = (LiveLink), meta = (BlueprintSpawnableComponent))
@@ -67,7 +68,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Robot Connection")
 	bool IsRobotConnected() const { return bIsRobotConnected; }
 
-	/** Get the current connection health state */
 	UFUNCTION(BlueprintCallable, Category = "Robot Connection")
 	EDobotConnectionState GetConnectionState() const;
 
@@ -78,6 +78,9 @@ protected:
 	virtual bool ShouldCreateRenderState() const override { return true; }
 
 private:
+	void CleanupDeadSource();
+	void AttemptReconnect();
+
 	bool bHasRecordedStart = false;
 	FTransform CameraStartTransform;
 	FTransform RobotStartTransform;
@@ -85,4 +88,12 @@ private:
 
 	bool bIsRobotConnected = false;
 	TSharedPtr<FDobotLiveLinkSource> ConnectedSource;
+
+	// Auto-reconnect state
+	bool bIsReconnecting = false;
+	float ReconnectTimer = 0.0f;
+	float ReconnectLogTimer = 0.0f;
+	static constexpr float ReconnectInterval = 3.0f;
+	static constexpr float ReconnectLogInterval = 15.0f;
+	bool bHasAttemptedStartupAutoConnect = false;
 };

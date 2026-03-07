@@ -23,13 +23,13 @@
 
 const FName FDobotLiveLinkEditorModule::TabName(TEXT("DobotLiveLinkPanel"));
 
-// Helper to get color for connection state
 static FLinearColor GetConnectionStateColor(EDobotConnectionState State)
 {
 	switch (State)
 	{
 	case EDobotConnectionState::Connected:		return FLinearColor::Green;
-	case EDobotConnectionState::ConnectionLost:	return FLinearColor(1.0f, 0.5f, 0.0f); // Orange
+	case EDobotConnectionState::ConnectionLost:	return FLinearColor(1.0f, 0.5f, 0.0f);
+	case EDobotConnectionState::Reconnecting:	return FLinearColor(1.0f, 0.8f, 0.0f);
 	case EDobotConnectionState::NoConnection:
 	default:									return FLinearColor::Red;
 	}
@@ -41,6 +41,7 @@ static FText GetConnectionStateText(EDobotConnectionState State)
 	{
 	case EDobotConnectionState::Connected:		return LOCTEXT("StateConnected", "Connected - Receiving Data");
 	case EDobotConnectionState::ConnectionLost:	return LOCTEXT("StateLost", "Connection Lost");
+	case EDobotConnectionState::Reconnecting:	return LOCTEXT("StateReconnecting", "Reconnecting...");
 	case EDobotConnectionState::NoConnection:
 	default:									return LOCTEXT("StateNone", "Disconnected");
 	}
@@ -236,7 +237,7 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 								]
 						]
 
-					// No cameras found message
+					// No cameras message
 					+ SVerticalBox::Slot()
 						.AutoHeight()
 						.Padding(0, 5, 0, 10)
@@ -244,9 +245,7 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 							SNew(SBox)
 								.Visibility_Lambda([Settings]()
 									{
-										return Settings->FindAllDobotCameras().Num() == 0
-											? EVisibility::Visible
-											: EVisibility::Collapsed;
+										return Settings->FindAllDobotCameras().Num() == 0 ? EVisibility::Visible : EVisibility::Collapsed;
 									})
 								[
 									SNew(STextBlock)
@@ -293,7 +292,6 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 													}
 													else
 													{
-														UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Subject name '%s' is already in use by another camera"), *NewName);
 														if (GEngine)
 														{
 															GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
@@ -474,7 +472,43 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 										]
 								]
 
-							// Connection status - three states
+							// Auto-Connect checkbox
+							+ SVerticalBox::Slot()
+								.AutoHeight()
+								.Padding(0, 5, 0, 2)
+								[
+									SNew(SHorizontalBox)
+										+ SHorizontalBox::Slot()
+										.AutoWidth()
+										.VAlign(VAlign_Center)
+										.Padding(0, 0, 10, 0)
+										[
+											SNew(STextBlock).Text(LOCTEXT("AutoConnectLabel", "Auto-Connect:"))
+										]
+										+ SHorizontalBox::Slot()
+										.AutoWidth()
+										.VAlign(VAlign_Center)
+										[
+											SNew(SCheckBox)
+												.IsChecked_Lambda([Settings]()
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														if (!Comp) return ECheckBoxState::Unchecked;
+														return Settings->ShouldAutoConnect(Comp->LiveLinkSubjectName.ToString())
+															? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+													})
+												.OnCheckStateChanged_Lambda([Settings](ECheckBoxState NewState)
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														if (Comp)
+														{
+															Settings->SetAutoConnect(Comp->LiveLinkSubjectName.ToString(), NewState == ECheckBoxState::Checked);
+														}
+													})
+										]
+								]
+
+							// Connection status
 							+ SVerticalBox::Slot()
 								.AutoHeight()
 								.Padding(0, 8, 0, 5)
@@ -600,7 +634,8 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 												.IsEnabled_Lambda([Settings]()
 													{
 														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return Comp && Comp->GetConnectionState() == EDobotConnectionState::Connected;
+														return Comp && (Comp->GetConnectionState() == EDobotConnectionState::Connected
+															|| Comp->GetConnectionState() == EDobotConnectionState::Reconnecting);
 													})
 										]
 									+ SHorizontalBox::Slot()

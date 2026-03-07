@@ -54,6 +54,10 @@ public:
 	/** Check if a subject name is available (not used by another camera) */
 	bool IsSubjectNameAvailable(const FString& Name, const UDobotLiveLinkCameraComponent* ExcludeComp = nullptr) const;
 
+	/** Auto-connect management — stored in config, persists across sessions */
+	bool ShouldAutoConnect(const FString& SubjectName) const;
+	void SetAutoConnect(const FString& SubjectName, bool bEnable);
+
 	// ---- Camera Settings (synced to selected camera) ----
 
 	UPROPERTY(config, EditAnywhere, BlueprintReadWrite, Category = "Camera Settings", meta = (DisplayName = "Focal Length (mm)", ClampMin = "4.0", ClampMax = "1000.0"))
@@ -72,6 +76,11 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DeckLink Output", meta = (DisplayName = "Output Active"))
 	bool bOutputActive;
+
+	// ---- Auto-Connect (persisted in config) ----
+
+	UPROPERTY(config)
+	TArray<FString> AutoConnectSubjects;
 
 private:
 	UPROPERTY(Transient)

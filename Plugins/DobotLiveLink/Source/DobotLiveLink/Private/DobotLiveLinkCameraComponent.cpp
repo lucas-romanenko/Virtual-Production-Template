@@ -1,5 +1,6 @@
 #include "DobotLiveLinkCameraComponent.h"
 #include "DobotLiveLinkSource.h"
+#include "DobotLiveLinkSettings.h"
 #include "ILiveLinkClient.h"
 #include "LiveLinkClientReference.h"
 #include "Roles/LiveLinkTransformRole.h"
@@ -26,6 +27,10 @@ UDobotLiveLinkCameraComponent::UDobotLiveLinkCameraComponent()
 	bHasRecordedStart = false;
 	bHasRobotConnection = false;
 	bIsRobotConnected = false;
+	bIsReconnecting = false;
+	ReconnectTimer = 0.0f;
+	ReconnectLogTimer = 0.0f;
+	bHasAttemptedStartupAutoConnect = false;
 }
 
 void UDobotLiveLinkCameraComponent::BeginPlay()
@@ -80,19 +85,77 @@ void UDobotLiveLinkCameraComponent::ResetTrackingOrigin()
 
 EDobotConnectionState UDobotLiveLinkCameraComponent::GetConnectionState() const
 {
+	if (bIsReconnecting)
+	{
+		return EDobotConnectionState::Reconnecting;
+	}
+
 	if (!bIsRobotConnected)
 	{
 		return EDobotConnectionState::NoConnection;
 	}
 
-	// Check if the source is still alive
 	if (ConnectedSource.IsValid() && ConnectedSource->IsSourceStillValid())
 	{
 		return EDobotConnectionState::Connected;
 	}
 
-	// We thought we were connected but the source died
 	return EDobotConnectionState::ConnectionLost;
+}
+
+void UDobotLiveLinkCameraComponent::CleanupDeadSource()
+{
+	// Remove dead source from LiveLink client
+	IModularFeatures& ModularFeatures = IModularFeatures::Get();
+	if (ModularFeatures.IsModularFeatureAvailable(ILiveLinkClient::ModularFeatureName))
+	{
+		ILiveLinkClient& LiveLinkClient = ModularFeatures.GetModularFeature<ILiveLinkClient>(ILiveLinkClient::ModularFeatureName);
+		TArray<FGuid> SourceGuids = LiveLinkClient.GetSources();
+		for (const FGuid& Guid : SourceGuids)
+		{
+			FText SourceMachine = LiveLinkClient.GetSourceMachineName(Guid);
+			if (SourceMachine.ToString() == RobotIPAddress)
+			{
+				LiveLinkClient.RemoveSource(Guid);
+				UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Removed dead source from LiveLink"));
+				break;
+			}
+		}
+	}
+
+	ConnectedSource.Reset();
+	bIsRobotConnected = false;
+	bEnableTracking = false;
+	bHasRecordedStart = false;
+}
+
+void UDobotLiveLinkCameraComponent::AttemptReconnect()
+{
+	// Just try to connect normally
+	// If it fails, the source will die quickly and we'll try again next interval
+	bool bSuccess = ConnectToRobot();
+
+	if (bSuccess)
+	{
+		// ConnectToRobot resets bIsReconnecting via the reconnect stop at the top
+		// But we need to re-enable it if the source dies immediately
+		// Check on next tick via the normal connection lost detection
+		bIsReconnecting = false;
+
+		UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Reconnected to %s:%d (Subject: %s)"),
+			*RobotIPAddress, RobotPort, *LiveLinkSubjectName.ToString());
+
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Green,
+				FString::Printf(TEXT("Dobot Reconnected: %s:%d"), *RobotIPAddress, RobotPort));
+		}
+	}
+	else
+	{
+		// Stay in reconnecting state, ConnectToRobot cleared it so set it back
+		bIsReconnecting = true;
+	}
 }
 
 bool UDobotLiveLinkCameraComponent::ConnectToRobot()
@@ -101,6 +164,10 @@ bool UDobotLiveLinkCameraComponent::ConnectToRobot()
 	{
 		DisconnectFromRobot();
 	}
+
+	// Stop any reconnect attempts
+	bIsReconnecting = false;
+	ReconnectTimer = 0.0f;
 
 	IModularFeatures& ModularFeatures = IModularFeatures::Get();
 	if (!ModularFeatures.IsModularFeatureAvailable(ILiveLinkClient::ModularFeatureName))
@@ -137,7 +204,6 @@ bool UDobotLiveLinkCameraComponent::ConnectToRobot()
 					&& OtherComp->LiveLinkSubjectName == LiveLinkSubjectName)
 				{
 					bSourceExists = true;
-					// Share the source reference so we can check its health
 					ConnectedSource = OtherComp->ConnectedSource;
 					UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Reusing existing source from %s for subject %s"),
 						*RobotIPAddress, *LiveLinkSubjectName.ToString());
@@ -162,7 +228,6 @@ bool UDobotLiveLinkCameraComponent::ConnectToRobot()
 	bHasRobotConnection = true;
 	bIsRobotConnected = true;
 
-	// Auto-enable tracking on connect
 	bEnableTracking = true;
 	bHasRecordedStart = false;
 
@@ -173,36 +238,22 @@ bool UDobotLiveLinkCameraComponent::ConnectToRobot()
 
 void UDobotLiveLinkCameraComponent::DisconnectFromRobot()
 {
+	// Stop any reconnect attempts
+	bIsReconnecting = false;
+	ReconnectTimer = 0.0f;
+
 	if (!bIsRobotConnected) return;
 
 	if (ConnectedSource.IsValid())
 	{
-		// Remove from LiveLink client
-		IModularFeatures& ModularFeatures = IModularFeatures::Get();
-		if (ModularFeatures.IsModularFeatureAvailable(ILiveLinkClient::ModularFeatureName))
-		{
-			ILiveLinkClient& LiveLinkClient = ModularFeatures.GetModularFeature<ILiveLinkClient>(ILiveLinkClient::ModularFeatureName);
-
-			TArray<FGuid> SourceGuids = LiveLinkClient.GetSources();
-			for (const FGuid& Guid : SourceGuids)
-			{
-				FText SourceMachine = LiveLinkClient.GetSourceMachineName(Guid);
-				if (SourceMachine.ToString() == RobotIPAddress)
-				{
-					LiveLinkClient.RemoveSource(Guid);
-					UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Removed source from LiveLink client"));
-					break;
-				}
-			}
-		}
-
-		ConnectedSource->RequestSourceShutdown();
-		ConnectedSource.Reset();
+		CleanupDeadSource();
 	}
-
-	bIsRobotConnected = false;
-	bEnableTracking = false;
-	bHasRecordedStart = false;
+	else
+	{
+		bIsRobotConnected = false;
+		bEnableTracking = false;
+		bHasRecordedStart = false;
+	}
 
 	UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Disconnected and tracking disabled"));
 }
@@ -220,7 +271,42 @@ void UDobotLiveLinkCameraComponent::TickComponent(float DeltaTime, ELevelTick Ti
 		}
 	}
 
-	// Check for connection lost and auto-cleanup
+	// ---- Auto-connect on startup ----
+	if (!bHasAttemptedStartupAutoConnect && bHasRobotConnection && !bIsRobotConnected && !bIsReconnecting)
+	{
+		UDobotLiveLinkSettings* Settings = UDobotLiveLinkSettings::Get();
+		bool bShouldAutoConnect = Settings->ShouldAutoConnect(LiveLinkSubjectName.ToString());
+
+		if (bShouldAutoConnect)
+		{
+			// Wait a few seconds after editor starts before attempting
+			ReconnectTimer += DeltaTime;
+			if (ReconnectTimer >= 5.0f)
+			{
+				bHasAttemptedStartupAutoConnect = true;
+				ReconnectTimer = 0.0f;
+
+				UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Auto-connecting to %s:%d on startup..."),
+					*RobotIPAddress, RobotPort);
+
+				if (!ConnectToRobot())
+				{
+					bIsReconnecting = true;
+					ReconnectTimer = 0.0f;
+					ReconnectLogTimer = 0.0f;
+
+					UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Auto-connect failed, will retry every %.0fs"),
+						ReconnectInterval);
+				}
+			}
+		}
+		else
+		{
+			bHasAttemptedStartupAutoConnect = true;
+		}
+	}
+
+	// ---- Check for connection lost ----
 	if (bIsRobotConnected)
 	{
 		EDobotConnectionState State = GetConnectionState();
@@ -228,37 +314,49 @@ void UDobotLiveLinkCameraComponent::TickComponent(float DeltaTime, ELevelTick Ti
 		{
 			UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Connection lost to %s:%d"), *RobotIPAddress, RobotPort);
 
-			// Remove the dead source from LiveLink client
-			IModularFeatures& ModularFeatures = IModularFeatures::Get();
-			if (ModularFeatures.IsModularFeatureAvailable(ILiveLinkClient::ModularFeatureName))
-			{
-				ILiveLinkClient& LiveLinkClient = ModularFeatures.GetModularFeature<ILiveLinkClient>(ILiveLinkClient::ModularFeatureName);
-				TArray<FGuid> SourceGuids = LiveLinkClient.GetSources();
-				for (const FGuid& Guid : SourceGuids)
-				{
-					FText SourceMachine = LiveLinkClient.GetSourceMachineName(Guid);
-					if (SourceMachine.ToString() == RobotIPAddress)
-					{
-						LiveLinkClient.RemoveSource(Guid);
-						UE_LOG(LogTemp, Warning, TEXT("DobotLiveLinkCamera: Removed dead source from LiveLink"));
-						break;
-					}
-				}
-			}
-
-			bIsRobotConnected = false;
-			bEnableTracking = false;
-			bHasRecordedStart = false;
-			ConnectedSource.Reset();
+			CleanupDeadSource();
 
 			if (GEngine)
 			{
 				GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Orange,
 					FString::Printf(TEXT("Dobot Connection Lost: %s:%d"), *RobotIPAddress, RobotPort));
 			}
+
+			// Start auto-reconnect if enabled in config
+			UDobotLiveLinkSettings* Settings = UDobotLiveLinkSettings::Get();
+			if (Settings->ShouldAutoConnect(LiveLinkSubjectName.ToString()))
+			{
+				bIsReconnecting = true;
+				ReconnectTimer = 0.0f;
+				ReconnectLogTimer = 0.0f;
+			}
 		}
 	}
 
+	// ---- Auto-reconnect loop ----
+	if (bIsReconnecting)
+	{
+		ReconnectTimer += DeltaTime;
+		ReconnectLogTimer += DeltaTime;
+
+		if (ReconnectTimer >= ReconnectInterval)
+		{
+			ReconnectTimer = 0.0f;
+			AttemptReconnect();
+		}
+
+		// Log periodically so we don't spam
+		if (ReconnectLogTimer >= ReconnectLogInterval)
+		{
+			ReconnectLogTimer = 0.0f;
+			UE_LOG(LogTemp, Log, TEXT("DobotLiveLinkCamera: Still trying to reconnect to %s:%d..."),
+				*RobotIPAddress, RobotPort);
+		}
+
+		return; // Don't try to track while reconnecting
+	}
+
+	// ---- Tracking ----
 	if (!bEnableTracking || !CameraToControl)
 	{
 		return;

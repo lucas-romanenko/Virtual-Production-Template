@@ -251,3 +251,22 @@ ACineCameraActor* UDobotLiveLinkSettings::SpawnDobotCamera()
 
 	return NewCamera;
 }
+
+bool UDobotLiveLinkSettings::ShouldAutoConnect(const FString& SubjectName) const
+{
+	return AutoConnectSubjects.Contains(SubjectName);
+}
+
+void UDobotLiveLinkSettings::SetAutoConnect(const FString& SubjectName, bool bEnable)
+{
+	if (bEnable)
+	{
+		AutoConnectSubjects.AddUnique(SubjectName);
+	}
+	else
+	{
+		AutoConnectSubjects.Remove(SubjectName);
+	}
+
+	SaveConfig();
+}
