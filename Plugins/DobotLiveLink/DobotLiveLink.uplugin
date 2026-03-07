@@ -5,8 +5,8 @@
 	"FriendlyName": "Dobot LiveLink",
 	"Description": "LiveLink plugin for Dobot Nova 5 robot camera tracking",
 	"Category": "Virtual Production",
-	"CreatedBy": "Your Name",
-	"CreatedByURL": "",
+	"CreatedBy": "Lucas Romanenko",
+	"CreatedByURL": "https://lucas.romanenko.com",
 	"DocsURL": "",
 	"MarketplaceURL": "",
 	"SupportURL": "",
@@ -29,6 +29,10 @@
 	"Plugins": [
 		{
 			"Name": "LiveLink",
+			"Enabled": true
+		},
+		{
+			"Name": "MediaIOFramework",
 			"Enabled": true
 		}
 	]
