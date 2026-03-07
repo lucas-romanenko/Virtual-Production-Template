@@ -72,12 +72,12 @@ public:
 	UPROPERTY(config, EditAnywhere, BlueprintReadWrite, Category = "Camera Settings", meta = (DisplayName = "Sensor Height (mm)", ClampMin = "1.0", ClampMax = "100.0"))
 	float SensorHeight;
 
-	// ---- Output ----
+	// ---- Output (not shown in details view, controlled by panel buttons) ----
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DeckLink Output", meta = (DisplayName = "Output Active"))
+	UPROPERTY(Transient)
 	bool bOutputActive;
 
-	// ---- Auto-Connect (persisted in config) ----
+	// ---- Auto-Connect (persisted in config, not shown in details view) ----
 
 	UPROPERTY(config)
 	TArray<FString> AutoConnectSubjects;

@@ -334,18 +334,63 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 						.AutoHeight()
 						.Padding(0, 0, 0, 5)
 						[
-							SNew(STextBlock)
-								.Text(LOCTEXT("ConnectionHeader", "Robot Connection"))
-								.Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
+							SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+								.AutoWidth()
+								.VAlign(VAlign_Center)
+								.Padding(0, 0, 5, 0)
+								[
+									SNew(STextBlock)
+										.Text(LOCTEXT("ConnectionHeader", "Dobot Connection"))
+										.Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
+								]
+								+ SHorizontalBox::Slot()
+								.AutoWidth()
+								.VAlign(VAlign_Center)
+								.Padding(0, 0, 5, 0)
+								[
+									SNew(SBox)
+										.WidthOverride(10)
+										.HeightOverride(10)
+										[
+											SNew(SImage)
+												.ColorAndOpacity_Lambda([Settings]()
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														EDobotConnectionState State = Comp ? Comp->GetConnectionState() : EDobotConnectionState::NoConnection;
+														return GetConnectionStateColor(State);
+													})
+												.Image(FAppStyle::GetBrush("Icons.FilledCircle"))
+										]
+								]
+							+ SHorizontalBox::Slot()
+								.AutoWidth()
+								.VAlign(VAlign_Center)
+								[
+									SNew(STextBlock)
+										.Text_Lambda([Settings]()
+											{
+												UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+												EDobotConnectionState State = Comp ? Comp->GetConnectionState() : EDobotConnectionState::NoConnection;
+												return GetConnectionStateText(State);
+											})
+										.ColorAndOpacity_Lambda([Settings]()
+											{
+												UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+												EDobotConnectionState State = Comp ? Comp->GetConnectionState() : EDobotConnectionState::NoConnection;
+												return FSlateColor(GetConnectionStateColor(State));
+											})
+										.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
+								]
 						]
 
-						// Add Connection button
-						+ SVerticalBox::Slot()
+					// Add Connection button
+					+ SVerticalBox::Slot()
 						.AutoHeight()
 						.Padding(0, 0, 0, 5)
 						[
 							SNew(SButton)
-								.Text(LOCTEXT("AddConnection", "Add Robot Connection"))
+								.Text(LOCTEXT("AddConnection", "Add Dobot Connection"))
 								.HAlign(HAlign_Center)
 								.OnClicked_Lambda([Settings]()
 									{
@@ -381,7 +426,7 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 										.FillWidth(0.4f)
 										.VAlign(VAlign_Center)
 										[
-											SNew(STextBlock).Text(LOCTEXT("IPLabel", "Robot IP Address"))
+											SNew(STextBlock).Text(LOCTEXT("IPLabel", "Dobot IP Address"))
 										]
 										+ SHorizontalBox::Slot()
 										.FillWidth(0.6f)
@@ -415,7 +460,7 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 										.FillWidth(0.4f)
 										.VAlign(VAlign_Center)
 										[
-											SNew(STextBlock).Text(LOCTEXT("PortLabel", "Robot Port"))
+											SNew(STextBlock).Text(LOCTEXT("PortLabel", "Dobot Port"))
 										]
 										+ SHorizontalBox::Slot()
 										.FillWidth(0.6f)
@@ -504,58 +549,6 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 														{
 															Settings->SetAutoConnect(Comp->LiveLinkSubjectName.ToString(), NewState == ECheckBoxState::Checked);
 														}
-													})
-										]
-								]
-
-							// Connection status
-							+ SVerticalBox::Slot()
-								.AutoHeight()
-								.Padding(0, 8, 0, 5)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot()
-										.AutoWidth()
-										.VAlign(VAlign_Center)
-										.Padding(0, 0, 10, 0)
-										[
-											SNew(STextBlock).Text(LOCTEXT("ConnStatusLabel", "Status:"))
-										]
-										+ SHorizontalBox::Slot()
-										.AutoWidth()
-										.VAlign(VAlign_Center)
-										.Padding(0, 0, 5, 0)
-										[
-											SNew(SBox)
-												.WidthOverride(12)
-												.HeightOverride(12)
-												[
-													SNew(SImage)
-														.ColorAndOpacity_Lambda([Settings]()
-															{
-																UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-																EDobotConnectionState State = Comp ? Comp->GetConnectionState() : EDobotConnectionState::NoConnection;
-																return GetConnectionStateColor(State);
-															})
-														.Image(FAppStyle::GetBrush("Icons.FilledCircle"))
-												]
-										]
-									+ SHorizontalBox::Slot()
-										.AutoWidth()
-										.VAlign(VAlign_Center)
-										[
-											SNew(STextBlock)
-												.Text_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														EDobotConnectionState State = Comp ? Comp->GetConnectionState() : EDobotConnectionState::NoConnection;
-														return GetConnectionStateText(State);
-													})
-												.ColorAndOpacity_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														EDobotConnectionState State = Comp ? Comp->GetConnectionState() : EDobotConnectionState::NoConnection;
-														return FSlateColor(GetConnectionStateColor(State));
 													})
 										]
 								]
