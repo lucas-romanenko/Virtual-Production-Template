@@ -94,6 +94,30 @@ Close the Python script to test disconnect detection. Restart it to test auto-re
 
 ---
 
+## Diagnostic Tool
+
+A real-time diagnostic script is included for connecting to a real Dobot robot and inspecting all data coming from port 30004. Run it before opening Unreal to verify data is flowing.
+
+```bash
+python Tests/read_dobot.py                     # Default IP (192.168.5.1)
+python Tests/read_dobot.py 192.168.5.1         # Specify IP
+python Tests/read_dobot.py 192.168.5.1 30004   # Specify IP and port
+```
+
+The script shows a live-updating terminal dashboard with:
+
+- **Packet validation** — verifies the 0x123456789ABCDEF magic value
+- **Robot state** — mode, enabled, running, dragging, error status
+- **Tool position & rotation** — actual and target (the data used for camera tracking)
+- **Joint angles, speeds, currents, and temperatures** — all 6 joints
+- **Tool accelerometer** readings
+- **Digital I/O** bitmasks
+- **Unreal Engine coordinate mapping** — shows what the plugin would produce so you can verify axes
+
+On first packet, it saves `raw_packet.bin` (raw 1440 bytes) and `packet_fields.json` (all parsed fields) for offline analysis.
+
+---
+
 ## Network Setup
 
 Connect your PC and the Dobot robot to the same network.
