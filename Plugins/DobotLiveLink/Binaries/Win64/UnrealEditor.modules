@@ -1,0 +1,8 @@
+{
+	"BuildId": "47537391",
+	"Modules": 
+	{
+		"DobotLiveLink": "UnrealEditor-DobotLiveLink.dll",
+		"DobotLiveLinkEditor": "UnrealEditor-DobotLiveLinkEditor.dll"
+	}
+}

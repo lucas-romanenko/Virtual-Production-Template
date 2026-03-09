@@ -1,5 +1,5 @@
-# Unreal Engine
 Binaries/
+!Plugins/DobotLiveLink/Binaries/
 Intermediate/
 Saved/
 DerivedDataCache/
@@ -10,7 +10,6 @@ DerivedDataCache/
 *.sdf
 *.VC.db
 *.VC.opendb
-
-# OS
+*.pdb
 Thumbs.db
 Desktop.ini
