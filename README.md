@@ -84,8 +84,8 @@ Two Python scripts simulate Dobot robot data over TCP, so you can test the full 
 ### Start a Fake Robot
 
 ```bash
-python fake_robot.py       # Circle pattern on port 30004
-python fake_robot_2.py     # Figure-8 pattern on port 30005
+python Tests/fake_robot.py       # Circle pattern on port 30004
+python Tests/fake_robot_2.py     # Figure-8 pattern on port 30005
 ```
 
 In the Dobot LiveLink panel, set IP to `127.0.0.1`, port to `30004`, and connect. The camera will start moving.
