@@ -186,4 +186,4 @@ For using the plugin in your own project (without this template), a standalone p
 
 ## Credits
 
-Developed by Lucas Romanenko for ARRISE Powering Pragmatic Play virtual production workflows.
+Developed by Lucas Romanenko
