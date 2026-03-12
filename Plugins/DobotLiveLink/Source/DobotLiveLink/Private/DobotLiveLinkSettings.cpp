@@ -221,7 +221,7 @@ ACineCameraActor* UDobotLiveLinkSettings::SpawnDobotCamera()
 
 	SetSelectedCamera(NewCamera);
 
-	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Spawned new tracked camera '%s'"), *NextSubjectName);
+	UE_LOG(LogTemp, Warning, TEXT("LiveLink Settings: Spawned new tracked camera '%s'"), *NextSubjectName);
 
 	return NewCamera;
 }
@@ -312,7 +312,7 @@ UMediaOutput* UDobotLiveLinkSettings::CreateOutputAssetForPort(int32 PortIndex)
 	UClass* BMDOutputClass = LoadClass<UMediaOutput>(nullptr, TEXT("/Script/BlackmagicMediaOutput.BlackmagicMediaOutput"));
 	if (!BMDOutputClass)
 	{
-		UE_LOG(LogTemp, Error, TEXT("Dobot Settings: BlackmagicMediaOutput class not found. Is the Blackmagic plugin enabled?"));
+		UE_LOG(LogTemp, Error, TEXT("LiveLink Settings: BlackmagicMediaOutput class not found. Is the Blackmagic plugin enabled?"));
 		if (GEngine)
 		{
 			GEngine->AddOnScreenDebugMessage(-1, 5.0f, FColor::Red, TEXT("Blackmagic plugin not found. Enable it in Edit > Plugins."));
@@ -343,7 +343,7 @@ UMediaOutput* UDobotLiveLinkSettings::CreateOutputAssetForPort(int32 PortIndex)
 	OutputPortAssetPaths[PortIndex] = NewOutput->GetPathName();
 	SaveConfig();
 
-	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Created output asset '%s' for Port %d"), *AssetName, PortIndex + 1);
+	UE_LOG(LogTemp, Warning, TEXT("LiveLink Settings: Created output asset '%s' for Port %d"), *AssetName, PortIndex + 1);
 
 	return NewOutput;
 #else
@@ -365,7 +365,7 @@ bool UDobotLiveLinkSettings::StartPortOutput(int32 PortIndex)
 	UMediaOutput* MediaOutput = GetOutputAssetForPort(PortIndex);
 	if (!MediaOutput)
 	{
-		UE_LOG(LogTemp, Error, TEXT("Dobot Settings: No output asset configured for Port %d"), PortIndex + 1);
+		UE_LOG(LogTemp, Error, TEXT("LiveLink Settings: No output asset configured for Port %d"), PortIndex + 1);
 		if (GEngine)
 		{
 			GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
@@ -377,7 +377,7 @@ bool UDobotLiveLinkSettings::StartPortOutput(int32 PortIndex)
 	UMediaCapture* Capture = MediaOutput->CreateMediaCapture();
 	if (!Capture)
 	{
-		UE_LOG(LogTemp, Error, TEXT("Dobot Settings: Failed to create media capture for Port %d"), PortIndex + 1);
+		UE_LOG(LogTemp, Error, TEXT("LiveLink Settings: Failed to create media capture for Port %d"), PortIndex + 1);
 		if (GEngine)
 		{
 			GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
@@ -391,7 +391,7 @@ bool UDobotLiveLinkSettings::StartPortOutput(int32 PortIndex)
 
 	ActiveCaptures[PortIndex] = Capture;
 
-	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Started output on Port %d"), PortIndex + 1);
+	UE_LOG(LogTemp, Warning, TEXT("LiveLink Settings: Started output on Port %d"), PortIndex + 1);
 	return true;
 }
 
@@ -405,7 +405,7 @@ void UDobotLiveLinkSettings::StopPortOutput(int32 PortIndex)
 		ActiveCaptures[PortIndex] = nullptr;
 	}
 
-	UE_LOG(LogTemp, Warning, TEXT("Dobot Settings: Stopped output on Port %d"), PortIndex + 1);
+	UE_LOG(LogTemp, Warning, TEXT("LiveLink Settings: Stopped output on Port %d"), PortIndex + 1);
 }
 
 bool UDobotLiveLinkSettings::IsPortActive(int32 PortIndex) const

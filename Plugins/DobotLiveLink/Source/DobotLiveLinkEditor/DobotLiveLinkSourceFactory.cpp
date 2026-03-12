@@ -6,12 +6,12 @@
 
 FText UDobotLiveLinkSourceFactory::GetSourceDisplayName() const
 {
-	return LOCTEXT("SourceDisplayName", "Dobot Robot");
+	return LOCTEXT("SourceDisplayName", "FreeD Source (Lensmaster)");
 }
 
 FText UDobotLiveLinkSourceFactory::GetSourceTooltip() const
 {
-	return LOCTEXT("SourceTooltip", "Creates a connection to Dobot Nova 5 robot for camera tracking");
+	return LOCTEXT("SourceTooltip", "Creates a FreeD UDP listener for camera tracking data from Lensmaster or similar software");
 }
 
 TSharedPtr<SWidget> UDobotLiveLinkSourceFactory::BuildCreationPanel(FOnLiveLinkSourceCreated OnLiveLinkSourceCreated) const

@@ -17,14 +17,32 @@ struct FTimestampedTransform
 	FTimestampedTransform(double InTime, const FTransform& InTransform) : Timestamp(InTime), Transform(InTransform) {}
 };
 
+/** All decoded data from a single FreeD D1 packet */
+struct FFreeDFrameData
+{
+	// Position & Rotation (decoded to real units)
+	float Pan = 0;         // degrees
+	float Tilt = 0;        // degrees
+	float Roll = 0;        // degrees
+	float PosX_mm = 0;     // mm
+	float PosY_mm = 0;     // mm
+	float PosZ_mm = 0;     // mm
+
+	// Lens (raw 24-bit signed ints from the packet)
+	int32 ZoomRaw = 0;     // bytes 20-22
+	int32 FocusRaw = 0;    // bytes 23-25
+	int32 IrisRaw = 0;     // byte 26
+
+	FTransform Transform = FTransform::Identity;
+};
+
 class DOBOTLIVELINK_API FDobotLiveLinkSource : public ILiveLinkSource, public FRunnable
 {
 public:
-	// Port is now the LOCAL UDP port we listen on (default 40000, Lensmaster default)
 	FDobotLiveLinkSource(FString InIPAddress, int32 InPort, float InDelayMs = 0.0f, FString InSubjectName = TEXT("DobotCamera"));
 	virtual ~FDobotLiveLinkSource();
 
-	// ILiveLinkSource interface
+	// ILiveLinkSource
 	virtual void ReceiveClient(ILiveLinkClient* InClient, FGuid InSourceGuid) override;
 	virtual bool IsSourceStillValid() const override;
 	virtual bool RequestSourceShutdown() override;
@@ -32,24 +50,32 @@ public:
 	virtual FText GetSourceMachineName() const override;
 	virtual FText GetSourceStatus() const override;
 
-	// FRunnable interface
+	// FRunnable
 	virtual bool Init() override;
 	virtual uint32 Run() override;
 	virtual void Stop() override;
+
+	/** Latest frame data */
+	FFreeDFrameData GetLatestFrame() const { return LatestFrame; }
+
+	void SetFrozen(bool bFreeze) { bIsFrozen = bFreeze; }
+	bool IsFrozen() const { return bIsFrozen; }
+	float GetPacketsPerSecond() const { return PacketsPerSecond; }
+	FString GetConnectionIdentifier() const { return FString::Printf(TEXT("%s:%d"), *IPAddress, Port); }
+
+	/** Camera component pushes mapped lens values here for LiveLink frame data */
+	void SetMappedLensData(float FocalLength, float Aperture, float FocusDistance);
 
 private:
 	void UpdateLiveMode();
 	bool ParseFreeDPacket(const TArray<uint8>& PacketData);
 	bool GetDelayedTransform(FTransform& OutTransform) const;
-
-	// Decode a 3-byte big-endian signed value from FreeD packet
 	static int32 DecodeFreeDInt24(const uint8* Data);
 
 	ILiveLinkClient* Client;
 	FGuid SourceGuid;
-
-	FString IPAddress;   // Kept for display / source machine name
-	int32 Port;          // Local UDP listen port
+	FString IPAddress;
+	int32 Port;
 	float DelayMs;
 	FName SubjectName;
 
@@ -58,29 +84,21 @@ private:
 	FThreadSafeBool bIsRunning;
 
 	FTransform CurrentTransform;
+	FFreeDFrameData LatestFrame;
 
-	// Lens data decoded from FreeD packet
-	float CurrentFocalLength;    // mm
-	float CurrentAperture;       // f-stop
-	float CurrentFocusDistance;  // cm (UE units)
+	float MappedFocalLength;
+	float MappedAperture;
+	float MappedFocusDistance;
 
-	// Timeout: if no packet received within this many seconds, mark source as dead
+	FThreadSafeBool bIsFrozen;
+	float PacketsPerSecond;
+	int32 PacketCountThisSecond;
+	double PacketRateTimer;
 	double LastPacketTime;
 	static constexpr double PacketTimeoutSeconds = 5.0;
 
 	TArray<FTimestampedTransform> TransformBuffer;
 	static const int32 MaxBufferSize = 2048;
-
-	// FreeD D1 packet constants
 	static constexpr int32 FreeDPacketSize = 29;
-	static constexpr uint8  FreeDMessageType = 0xD1;
-
-	// Lens mapping: raw FreeD encoder range -> real units
-	// These match what you configure in Lensmaster's lens data table.
-	// Zoom raw range 0..16383 maps to FocalLengthMin..FocalLengthMax (mm)
-	// Focus raw range 0..16383 maps to FocusDistanceMin..FocusDistanceMax (cm)
-	float FocalLengthMin;
-	float FocalLengthMax;
-	float FocusDistanceMin;  // cm
-	float FocusDistanceMax;  // cm
+	static constexpr uint8 FreeDMessageType = 0xD1;
 };

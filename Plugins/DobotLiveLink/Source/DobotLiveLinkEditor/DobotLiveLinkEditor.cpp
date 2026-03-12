@@ -1,6 +1,7 @@
 #include "DobotLiveLinkEditor.h"
 #include "DobotLiveLinkSettings.h"
 #include "DobotLiveLinkCameraComponent.h"
+#include "DobotLiveLinkSource.h"
 #include "CineCameraActor.h"
 #include "MediaOutput.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -29,58 +30,55 @@
 
 const FName FDobotLiveLinkEditorModule::TabName(TEXT("DobotLiveLinkPanel"));
 
-static FLinearColor GetConnectionStateColor(EDobotConnectionState State)
+static const FLinearColor LiveColor(0.0f, 1.0f, 0.0f);
+static const FLinearColor DimColor(0.5f, 0.5f, 0.5f);
+
+static FLinearColor GetStateColor(EDobotConnectionState S)
 {
-	switch (State)
-	{
-	case EDobotConnectionState::Connected:		return FLinearColor::Green;
-	case EDobotConnectionState::ConnectionLost:	return FLinearColor(1.0f, 0.5f, 0.0f);
-	case EDobotConnectionState::Reconnecting:	return FLinearColor(1.0f, 0.8f, 0.0f);
-	case EDobotConnectionState::NoConnection:
-	default:									return FLinearColor::Red;
+	switch (S) {
+	case EDobotConnectionState::Connected: return FLinearColor::Green;
+	case EDobotConnectionState::ConnectionLost: return FLinearColor(1, 0.5f, 0);
+	case EDobotConnectionState::Reconnecting: return FLinearColor(1, 0.8f, 0);
+	default: return FLinearColor::Red;
 	}
 }
 
-static FText GetConnectionStateText(EDobotConnectionState State)
+static FText GetStateText(EDobotConnectionState S)
 {
-	switch (State)
-	{
-	case EDobotConnectionState::Connected:		return LOCTEXT("StateConnected", "Connected - Receiving Data");
-	case EDobotConnectionState::ConnectionLost:	return LOCTEXT("StateLost", "Connection Lost");
-	case EDobotConnectionState::Reconnecting:	return LOCTEXT("StateReconnecting", "Reconnecting...");
-	case EDobotConnectionState::NoConnection:
-	default:									return LOCTEXT("StateNone", "Disconnected");
+	switch (S) {
+	case EDobotConnectionState::Connected: return LOCTEXT("SC", "Connected");
+	case EDobotConnectionState::ConnectionLost: return LOCTEXT("SL", "Connection Lost");
+	case EDobotConnectionState::Reconnecting: return LOCTEXT("SR", "Reconnecting...");
+	default: return LOCTEXT("SN", "Disconnected");
 	}
+}
+
+// Read-only data row: label left, green mono value right
+static TSharedRef<SHorizontalBox> DataRow(const FText& Label, TFunction<FText()> Val, TFunction<bool()> Live)
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)[SNew(STextBlock).Text(Label)]
+		+ SHorizontalBox::Slot().FillWidth(0.6f).VAlign(VAlign_Center)
+		[SNew(STextBlock).Text_Lambda(MoveTemp(Val)).Font(FCoreStyle::GetDefaultFontStyle("Mono", 9))
+		.ColorAndOpacity_Lambda([Live]() { return FSlateColor(Live() ? LiveColor : DimColor); })];
 }
 
 void FDobotLiveLinkEditorModule::StartupModule()
 {
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(TabName,
 		FOnSpawnTab::CreateRaw(this, &FDobotLiveLinkEditorModule::OnSpawnTab))
-		.SetDisplayName(LOCTEXT("TabTitle", "Dobot LiveLink"))
-		.SetTooltipText(LOCTEXT("TabTooltip", "Dobot LiveLink - Camera Tracking & Output Settings"))
+		.SetDisplayName(LOCTEXT("Tab", "LiveLink Data"))
+		.SetTooltipText(LOCTEXT("Tip", "FreeD Camera Tracking"))
 		.SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Details"))
 		.SetAutoGenerateMenuEntry(false);
 
-	UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateLambda([this]()
-		{
-			FToolMenuOwnerScoped OwnerScoped(this);
-
-			UToolMenu* VPMenu = UToolMenus::Get()->ExtendMenu("LevelEditor.MainMenu.Window.VirtualProduction");
-			if (VPMenu)
-			{
-				FToolMenuSection& Section = VPMenu->FindOrAddSection("VIRTUALPRODUCTION");
-				Section.AddMenuEntry(
-					"DobotLiveLink",
-					LOCTEXT("MenuEntryTitle", "Dobot LiveLink"),
-					LOCTEXT("MenuEntryTooltip", "Open Dobot LiveLink Camera Tracking Settings"),
-					FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Details"),
-					FUIAction(FExecuteAction::CreateLambda([this]()
-						{
-							FGlobalTabmanager::Get()->TryInvokeTab(TabName);
-						}))
-				);
-			}
+	UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateLambda([this]() {
+		FToolMenuOwnerScoped Own(this);
+		if (UToolMenu* M = UToolMenus::Get()->ExtendMenu("LevelEditor.MainMenu.Window.VirtualProduction"))
+			M->FindOrAddSection("VIRTUALPRODUCTION").AddMenuEntry("DobotLiveLink",
+				LOCTEXT("MT", "LiveLink Data"), LOCTEXT("MTT", "FreeD Camera Tracking"),
+				FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Details"),
+				FUIAction(FExecuteAction::CreateLambda([this]() { FGlobalTabmanager::Get()->TryInvokeTab(TabName); })));
 		}));
 }
 
@@ -93,940 +91,230 @@ void FDobotLiveLinkEditorModule::ShutdownModule()
 
 void FDobotLiveLinkEditorModule::RefreshCameraList()
 {
-	UDobotLiveLinkSettings* Settings = UDobotLiveLinkSettings::Get();
-
+	UDobotLiveLinkSettings* S = UDobotLiveLinkSettings::Get();
 	CameraOptions.Empty();
-	TArray<ACineCameraActor*> Cameras = Settings->FindAllDobotCameras();
-	for (ACineCameraActor* Cam : Cameras)
-	{
-		CameraOptions.Add(MakeShared<FString>(Cam->GetActorLabel()));
-	}
-
-	if (Cameras.Num() > 0 && !Settings->GetSelectedCamera())
-	{
-		Settings->SetSelectedCamera(Cameras[0]);
-	}
-
-	if (CameraComboBox.IsValid())
-	{
-		CameraComboBox->RefreshOptions();
-	}
-
-	// Also refresh DeckLink camera options
+	auto Cams = S->FindAllDobotCameras();
+	for (auto* C : Cams) CameraOptions.Add(MakeShared<FString>(C->GetActorLabel()));
+	if (Cams.Num() > 0 && !S->GetSelectedCamera()) S->SetSelectedCamera(Cams[0]);
+	if (CameraComboBox.IsValid()) CameraComboBox->RefreshOptions();
 	DeckLinkCameraOptions.Empty();
 	DeckLinkCameraOptions.Add(MakeShared<FString>(TEXT("None")));
-	for (ACineCameraActor* Cam : Cameras)
-	{
-		UDobotLiveLinkCameraComponent* Comp = Cam->FindComponentByClass<UDobotLiveLinkCameraComponent>();
-		if (Comp)
-		{
-			DeckLinkCameraOptions.Add(MakeShared<FString>(Comp->LiveLinkSubjectName.ToString()));
-		}
-	}
+	for (auto* C : Cams) { auto* Comp = C->FindComponentByClass<UDobotLiveLinkCameraComponent>(); if (Comp) DeckLinkCameraOptions.Add(MakeShared<FString>(Comp->LiveLinkSubjectName.ToString())); }
 }
 
-TSharedRef<SVerticalBox> FDobotLiveLinkEditorModule::BuildDeckLinkPortRow(int32 PortIndex, UDobotLiveLinkSettings* Settings)
+TSharedRef<SVerticalBox> FDobotLiveLinkEditorModule::BuildDeckLinkPortRow(int32 I, UDobotLiveLinkSettings* S)
 {
-	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(0, 3)
+	return SNew(SVerticalBox) + SVerticalBox::Slot().AutoHeight().Padding(0, 3)
 		[
 			SNew(SHorizontalBox)
-
-				// Port label
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				.Padding(0, 0, 8, 0)
-				[
-					SNew(STextBlock)
-						.Text(FText::Format(LOCTEXT("PortLabel", "Port {0}:"), FText::AsNumber(PortIndex + 1)))
-						.Font(FCoreStyle::GetDefaultFontStyle("Bold", 9))
-				]
-
-				// Camera dropdown
-				+ SHorizontalBox::Slot()
-				.FillWidth(1.0f)
-				.VAlign(VAlign_Center)
-				.Padding(0, 0, 5, 0)
-				[
-					SNew(SComboBox<TSharedPtr<FString>>)
-						.OptionsSource(&DeckLinkCameraOptions)
-						.OnSelectionChanged_Lambda([Settings, PortIndex](TSharedPtr<FString> NewSelection, ESelectInfo::Type SelectInfo)
-							{
-								if (!NewSelection.IsValid()) return;
-								FString Selected = *NewSelection;
-								Settings->SetPortCamera(PortIndex, Selected == TEXT("None") ? FString() : Selected);
-							})
-						.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item)
-							{
-								return SNew(STextBlock).Text(FText::FromString(*Item));
-							})
-						.Content()
-						[
-							SNew(STextBlock)
-								.Text_Lambda([Settings, PortIndex]()
-									{
-										FString CamName = Settings->GetPortCamera(PortIndex);
-										return CamName.IsEmpty() ? LOCTEXT("NoneSelected", "None") : FText::FromString(CamName);
-									})
-						]
-				]
-
-			// Status dot
-			+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				.Padding(0, 0, 5, 0)
-				[
-					SNew(SBox)
-						.WidthOverride(10)
-						.HeightOverride(10)
-						[
-							SNew(SImage)
-								.ColorAndOpacity_Lambda([Settings, PortIndex]()
-									{
-										return Settings->IsPortActive(PortIndex) ? FLinearColor::Green : FLinearColor(0.3f, 0.3f, 0.3f);
-									})
-								.Image(FAppStyle::GetBrush("Icons.FilledCircle"))
-						]
-				]
-
-			// Start button
-			+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.Padding(0, 0, 2, 0)
-				[
-					SNew(SButton)
-						.Text(LOCTEXT("StartBtn", "Start"))
-						.OnClicked_Lambda([Settings, PortIndex]()
-							{
-								Settings->StartPortOutput(PortIndex);
-								return FReply::Handled();
-							})
-						.IsEnabled_Lambda([Settings, PortIndex]()
-							{
-								return !Settings->IsPortActive(PortIndex) && !Settings->GetPortCamera(PortIndex).IsEmpty();
-							})
-				]
-
-			// Stop button
-			+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.Padding(0, 0, 2, 0)
-				[
-					SNew(SButton)
-						.Text(LOCTEXT("StopBtn", "Stop"))
-						.OnClicked_Lambda([Settings, PortIndex]()
-							{
-								Settings->StopPortOutput(PortIndex);
-								return FReply::Handled();
-							})
-						.IsEnabled_Lambda([Settings, PortIndex]()
-							{
-								return Settings->IsPortActive(PortIndex);
-							})
-				]
-
-			// Open Settings button
-			+ SHorizontalBox::Slot()
-				.AutoWidth()
-				[
-					SNew(SButton)
-						.Text(LOCTEXT("SettingsBtn", "Settings"))
-						.OnClicked_Lambda([Settings, PortIndex]()
-							{
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 8, 0)
+				[SNew(STextBlock).Text(FText::Format(LOCTEXT("PL", "Port {0}:"), FText::AsNumber(I + 1))).Font(FCoreStyle::GetDefaultFontStyle("Bold", 9))]
+				+ SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0, 0, 5, 0)
+				[SNew(SComboBox<TSharedPtr<FString>>).OptionsSource(&DeckLinkCameraOptions)
+				.OnSelectionChanged_Lambda([S, I](TSharedPtr<FString> Sel, ESelectInfo::Type) { if (Sel.IsValid()) S->SetPortCamera(I, *Sel == TEXT("None") ? FString() : *Sel); })
+				.OnGenerateWidget_Lambda([](TSharedPtr<FString> It) { return SNew(STextBlock).Text(FText::FromString(*It)); })
+				.Content()[SNew(STextBlock).Text_Lambda([S, I]() { FString N = S->GetPortCamera(I); return N.IsEmpty() ? LOCTEXT("Nn", "None") : FText::FromString(N); })]]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 5, 0)
+				[SNew(SBox).WidthOverride(10).HeightOverride(10)[SNew(SImage).ColorAndOpacity_Lambda([S, I]() { return S->IsPortActive(I) ? FLinearColor::Green : FLinearColor(0.3f, 0.3f, 0.3f); }).Image(FAppStyle::GetBrush("Icons.FilledCircle"))]]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)[SNew(SButton).Text(LOCTEXT("Go", "Start")).OnClicked_Lambda([S, I]() { S->StartPortOutput(I); return FReply::Handled(); }).IsEnabled_Lambda([S, I]() { return !S->IsPortActive(I) && !S->GetPortCamera(I).IsEmpty(); })]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)[SNew(SButton).Text(LOCTEXT("No", "Stop")).OnClicked_Lambda([S, I]() { S->StopPortOutput(I); return FReply::Handled(); }).IsEnabled_Lambda([S, I]() { return S->IsPortActive(I); })]
+				+ SHorizontalBox::Slot().AutoWidth()[SNew(SButton).Text(LOCTEXT("Cg", "Settings")).OnClicked_Lambda([S, I]() {
 #if WITH_EDITOR
-								UMediaOutput* Output = Settings->GetOutputAssetForPort(PortIndex);
-								if (!Output)
-								{
-									Output = Settings->CreateOutputAssetForPort(PortIndex);
-								}
-								if (Output && GEditor)
-								{
-									GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(Cast<UObject>(Output));
-								}
+				UMediaOutput* O = S->GetOutputAssetForPort(I); if (!O) O = S->CreateOutputAssetForPort(I);
+				if (O && GEditor) GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(Cast<UObject>(O));
 #endif
-								return FReply::Handled();
-							})
-				]
+				return FReply::Handled(); })]
 		];
 }
 
-TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs& SpawnTabArgs)
+TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs& Args)
 {
 	UDobotLiveLinkSettings* Settings = UDobotLiveLinkSettings::Get();
-
 	RefreshCameraList();
 	Settings->LoadCameraSettings();
-
-	// Ensure ActiveCaptures array is sized
 	Settings->SetNumOutputPorts(Settings->GetNumOutputPorts());
 
-
-	// Build DeckLink port rows container
-	TSharedRef<SVerticalBox> DeckLinkPortsContainer = SNew(SVerticalBox);
-	DeckLinkPortsBox = DeckLinkPortsContainer;
-
+	TSharedRef<SVerticalBox> DLPorts = SNew(SVerticalBox);
+	DeckLinkPortsBox = DLPorts;
 	for (int32 i = 0; i < Settings->GetNumOutputPorts(); i++)
-	{
-		DeckLinkPortsContainer->AddSlot()
-			.AutoHeight()
-			[
-				BuildDeckLinkPortRow(i, Settings)
-			];
-	}
+		DLPorts->AddSlot().AutoHeight()[BuildDeckLinkPortRow(i, Settings)];
 
-	return SNew(SDockTab)
-		.TabRole(ETabRole::NomadTab)
-		[
-			SNew(SScrollBox)
-				+ SScrollBox::Slot()
-				.Padding(10.0f)
-				[
-					SNew(SVerticalBox)
+	auto GC = [Settings]() -> UDobotLiveLinkCameraComponent* { return Settings->GetSelectedDobotComponent(); };
+	auto Live = [Settings]() -> bool { auto* C = Settings->GetSelectedDobotComponent(); return C && C->IsRobotConnected() && C->GetConnectedSource().IsValid(); };
+	auto GF = [Settings]() -> FFreeDFrameData { auto* C = Settings->GetSelectedDobotComponent(); if (C) { auto S = C->GetConnectedSource(); if (S.IsValid()) return S->GetLatestFrame(); } return FFreeDFrameData(); };
 
-						// ========== HEADER ==========
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 5)
-						[
-							SNew(STextBlock)
-								.Text(LOCTEXT("PanelHeader", "Dobot LiveLink Settings"))
-								.Font(FCoreStyle::GetDefaultFontStyle("Bold", 16))
-						]
+	return SNew(SDockTab).TabRole(ETabRole::NomadTab)
+		[SNew(SScrollBox) + SScrollBox::Slot().Padding(10)
+		[SNew(SVerticalBox)
 
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 5)
-						[
-							SNew(SSeparator)
-						]
+		// ===== HEADER =====
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
+		[SNew(STextBlock).Text(LOCTEXT("H", "LiveLink Data")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 16))]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)[SNew(SSeparator)]
 
-						// ========== CAMERA SELECTOR ==========
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 5)
-						[
-							SNew(SHorizontalBox)
-								+ SHorizontalBox::Slot()
-								.AutoWidth()
-								.VAlign(VAlign_Center)
-								.Padding(0, 0, 10, 0)
-								[
-									SNew(STextBlock)
-										.Text(LOCTEXT("CameraLabel", "Active Camera:"))
-										.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
-								]
-								+ SHorizontalBox::Slot()
-								.FillWidth(1.0f)
-								.VAlign(VAlign_Center)
-								.Padding(0, 0, 5, 0)
-								[
-									SAssignNew(CameraComboBox, SComboBox<TSharedPtr<FString>>)
-										.OptionsSource(&CameraOptions)
-										.OnSelectionChanged_Lambda([this, Settings](TSharedPtr<FString> NewSelection, ESelectInfo::Type SelectInfo)
-											{
-												if (!NewSelection.IsValid()) return;
-												TArray<ACineCameraActor*> CurrentCameras = Settings->FindAllDobotCameras();
-												for (ACineCameraActor* Cam : CurrentCameras)
-												{
-													if (Cam->GetActorLabel() == *NewSelection)
-													{
-														Settings->SetSelectedCamera(Cam);
-														if (CachedDetailsView.IsValid())
-														{
-															CachedDetailsView.Pin()->SetObject(Settings, true);
-														}
-														break;
-													}
-												}
-											})
-										.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item)
-											{
-												return SNew(STextBlock).Text(FText::FromString(*Item));
-											})
-										.Content()
-										[
-											SNew(STextBlock)
-												.Text_Lambda([Settings]()
-													{
-														ACineCameraActor* Cam = Settings->GetSelectedCamera();
-														return Cam ? FText::FromString(Cam->GetActorLabel()) : LOCTEXT("NoCam", "No Camera Selected");
-													})
-										]
-								]
-							+ SHorizontalBox::Slot()
-								.AutoWidth()
-								.Padding(0, 0, 2, 0)
-								[
-									SNew(SButton)
-										.Text(LOCTEXT("RefreshCameras", "Refresh"))
-										.OnClicked_Lambda([this]()
-											{
-												RefreshCameraList();
-												return FReply::Handled();
-											})
-								]
-							+ SHorizontalBox::Slot()
-								.AutoWidth()
-								[
-									SNew(SButton)
-										.Text(LOCTEXT("AddCamera", "+ Add Camera"))
-										.OnClicked_Lambda([this, Settings]()
-											{
-												Settings->SpawnDobotCamera();
-												RefreshCameraList();
-												if (CachedDetailsView.IsValid())
-												{
-													CachedDetailsView.Pin()->SetObject(Settings, true);
-												}
-												return FReply::Handled();
-											})
-								]
-						]
+		// ===== CAMERA =====
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 10, 0)
+		[SNew(STextBlock).Text(LOCTEXT("CL", "Camera:")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))]
+		+ SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(0, 0, 5, 0)
+		[SAssignNew(CameraComboBox, SComboBox<TSharedPtr<FString>>).OptionsSource(&CameraOptions)
+		.OnSelectionChanged_Lambda([this, Settings](TSharedPtr<FString> Sel, ESelectInfo::Type) { if (!Sel.IsValid()) return; for (auto* Cam : Settings->FindAllDobotCameras()) if (Cam->GetActorLabel() == *Sel) { Settings->SetSelectedCamera(Cam); break; } })
+		.OnGenerateWidget_Lambda([](TSharedPtr<FString> I) { return SNew(STextBlock).Text(FText::FromString(*I)); })
+		.Content()[SNew(STextBlock).Text_Lambda([Settings]() { auto* C = Settings->GetSelectedCamera(); return C ? FText::FromString(C->GetActorLabel()) : LOCTEXT("NC", "No Camera"); })]]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 2, 0)
+		[SNew(SButton).Text(LOCTEXT("Rf", "Refresh")).OnClicked_Lambda([this]() { RefreshCameraList(); return FReply::Handled(); })]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[SNew(SButton).Text(LOCTEXT("Ad", "+ Add Camera")).OnClicked_Lambda([this, Settings]() { Settings->SpawnDobotCamera(); RefreshCameraList(); return FReply::Handled(); })]]
 
-					// No cameras message
-					+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 5, 0, 10)
-						[
-							SNew(SBox)
-								.Visibility_Lambda([Settings]()
-									{
-										return Settings->FindAllDobotCameras().Num() == 0 ? EVisibility::Visible : EVisibility::Collapsed;
-									})
-								[
-									SNew(STextBlock)
-										.Text(LOCTEXT("NoCamerasMsg", "No tracked cameras found in the level.\nClick '+ Add Camera' to create one."))
-										.ColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.7f, 0.0f)))
-										.Justification(ETextJustify::Center)
-								]
-						]
+	+ SVerticalBox::Slot().AutoHeight().Padding(0, 5, 0, 10)
+		[SNew(SBox).Visibility_Lambda([Settings]() { return Settings->FindAllDobotCameras().Num() == 0 ? EVisibility::Visible : EVisibility::Collapsed; })
+		[SNew(STextBlock).Text(LOCTEXT("Hint", "No tracked cameras. Click '+ Add Camera'.")).ColorAndOpacity(FSlateColor(FLinearColor(1, 0.7f, 0))).Justification(ETextJustify::Center)]]
 
-					// ========== SUBJECT NAME ==========
-					+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 10)
-						[
-							SNew(SHorizontalBox)
-								+ SHorizontalBox::Slot()
-								.AutoWidth()
-								.VAlign(VAlign_Center)
-								.Padding(0, 0, 10, 0)
-								[
-									SNew(STextBlock)
-										.Text(LOCTEXT("SubjectLabel", "Subject Name:"))
-										.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
-								]
-								+ SHorizontalBox::Slot()
-								.FillWidth(1.0f)
-								.VAlign(VAlign_Center)
-								[
-									SNew(SEditableTextBox)
-										.Text_Lambda([Settings]()
-											{
-												UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-												return Comp ? FText::FromName(Comp->LiveLinkSubjectName) : FText::GetEmpty();
-											})
-										.OnTextCommitted_Lambda([Settings](const FText& NewText, ETextCommit::Type CommitType)
-											{
-												UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-												if (Comp && !Comp->IsRobotConnected())
-												{
-													FString NewName = NewText.ToString();
-													if (Settings->IsSubjectNameAvailable(NewName, Comp))
-													{
-														Comp->LiveLinkSubjectName = FName(*NewName);
-													}
-													else
-													{
-														if (GEngine)
-														{
-															GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
-																FString::Printf(TEXT("Subject name '%s' is already in use"), *NewName));
-														}
-													}
-												}
-											})
-										.IsEnabled_Lambda([Settings]()
-											{
-												UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-												return Comp && !Comp->IsRobotConnected();
-											})
-								]
-						]
+		// Subject
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 8)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 10, 0)
+		[SNew(STextBlock).Text(LOCTEXT("SN", "Subject:")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))]
+		+ SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
+		[SNew(SEditableTextBox)
+		.Text_Lambda([GC]() { auto* C = GC(); return C ? FText::FromName(C->LiveLinkSubjectName) : FText::GetEmpty(); })
+		.OnTextCommitted_Lambda([Settings, GC](const FText& T, ETextCommit::Type) { auto* C = GC(); if (C && !C->IsRobotConnected()) { FString N = T.ToString(); if (Settings->IsSubjectNameAvailable(N, C)) C->LiveLinkSubjectName = FName(*N); } })
+		.IsEnabled_Lambda([GC]() { auto* C = GC(); return C && !C->IsRobotConnected(); })]]
 
-					+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 5)
-						[
-							SNew(SSeparator)
-						]
+	// ===== FREED SOURCE =====
+	+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)[SNew(SSeparator)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 5, 0)
+		[SNew(STextBlock).Text(LOCTEXT("FH", "FreeD Source")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 5, 0)
+		[SNew(SBox).WidthOverride(10).HeightOverride(10)[SNew(SImage)
+		.ColorAndOpacity_Lambda([GC]() { auto* C = GC(); return GetStateColor(C ? C->GetConnectionState() : EDobotConnectionState::NoConnection); })
+		.Image(FAppStyle::GetBrush("Icons.FilledCircle"))]]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[SNew(STextBlock)
+		.Text_Lambda([GC]() { auto* C = GC(); return GetStateText(C ? C->GetConnectionState() : EDobotConnectionState::NoConnection); })
+		.ColorAndOpacity_Lambda([GC]() { auto* C = GC(); return FSlateColor(GetStateColor(C ? C->GetConnectionState() : EDobotConnectionState::NoConnection)); })
+		.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))]
+		+ SHorizontalBox::Slot().FillWidth(1.0f)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[SNew(STextBlock)
+		.Text_Lambda([Live, GC]() { if (!Live()) return FText::GetEmpty(); auto S = GC()->GetConnectedSource(); return S.IsValid() ? FText::FromString(FString::Printf(TEXT("%.0f pkt/s"), S->GetPacketsPerSecond())) : FText::GetEmpty(); })
+		.Font(FCoreStyle::GetDefaultFontStyle("Mono", 8)).ColorAndOpacity(FSlateColor(LiveColor))]
+		]
 
-						// ========== CAMERA SETTINGS ==========
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 5)
-						[
-							SNew(STextBlock)
-								.Text(LOCTEXT("CameraSettingsHeader", "Camera Settings"))
-								.Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
-						]
+	+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
+		[SNew(SButton).Text(LOCTEXT("AS", "Add FreeD Source")).HAlign(HAlign_Center)
+		.OnClicked_Lambda([GC]() { auto* C = GC(); if (C) C->bHasRobotConnection = true; return FReply::Handled(); })
+		.Visibility_Lambda([GC]() { auto* C = GC(); return (C && !C->bHasRobotConnection) ? EVisibility::Visible : EVisibility::Collapsed; })]
 
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 8)
-						[
-							SNew(SVerticalBox)
+		// Connection panel
+		+ SVerticalBox::Slot().AutoHeight()
+		[SNew(SVerticalBox).Visibility_Lambda([GC]() { auto* C = GC(); return (C && C->bHasRobotConnection) ? EVisibility::Visible : EVisibility::Collapsed; })
 
-								// ---- Focal Length (read-only, driven by FreeD zoom) ----
-								+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
-										[SNew(STextBlock).Text(LOCTEXT("FocalLengthLabel", "Focal Length (mm)"))]
-										+ SHorizontalBox::Slot().FillWidth(0.6f).VAlign(VAlign_Center)
-										[
-											SNew(STextBlock)
-												.Text_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp && Comp->CameraToControl)
-															return FText::FromString(FString::Printf(TEXT("%.3f"), Comp->CameraToControl->CurrentFocalLength));
-														return FText::FromString(TEXT("--"));
-													})
-												.ColorAndOpacity_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														bool bLive = Comp && Comp->IsRobotConnected() && Comp->CameraToControl;
-														return FSlateColor(bLive ? FLinearColor::Green : FLinearColor(0.5f, 0.5f, 0.5f));
-													})
-										]
-								]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(0.35f).VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("IP", "Source IP"))]
+		+ SHorizontalBox::Slot().FillWidth(0.65f)
+		[SNew(SEditableTextBox)
+		.Text_Lambda([GC]() { auto* C = GC(); return C ? FText::FromString(C->RobotIPAddress) : FText::GetEmpty(); })
+		.OnTextCommitted_Lambda([GC](const FText& T, ETextCommit::Type) { auto* C = GC(); if (C && !C->IsRobotConnected()) C->RobotIPAddress = T.ToString(); })
+		.IsEnabled_Lambda([GC]() { auto* C = GC(); return C && !C->IsRobotConnected(); })]]
 
-							// ---- Aperture (manual input) ----
-							+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
-										[SNew(STextBlock).Text(LOCTEXT("ApertureLabel", "Aperture (f-stop)"))]
-										+ SHorizontalBox::Slot().FillWidth(0.6f).VAlign(VAlign_Center)
-										[
-											SNew(SSpinBox<float>)
-												.MinValue(1.0f)
-												.MaxValue(32.0f)
-												.Delta(0.1f)
-												.MinFractionalDigits(1)
-												.MaxFractionalDigits(3)
-												.Value_Lambda([Settings]() -> float
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return (Comp && Comp->CameraToControl) ? Comp->CameraToControl->CurrentAperture : 2.8f;
-													})
-												.OnValueChanged_Lambda([Settings](float NewValue)
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp && Comp->CameraToControl)
-															Comp->CameraToControl->CurrentAperture = NewValue;
-													})
-										]
-								]
+	+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(0.35f).VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("PT", "UDP Port"))]
+		+ SHorizontalBox::Slot().FillWidth(0.65f)
+		[SNew(SSpinBox<int32>).MinValue(1).MaxValue(65535)
+		.Value_Lambda([GC]() -> int32 { auto* C = GC(); return C ? C->RobotPort : 40000; })
+		.OnValueChanged_Lambda([GC](int32 V) { auto* C = GC(); if (C && !C->IsRobotConnected()) C->RobotPort = V; })
+		.IsEnabled_Lambda([GC]() { auto* C = GC(); return C && !C->IsRobotConnected(); })]]
 
-							// ---- Focus Distance (manual input) ----
-							+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
-										[SNew(STextBlock).Text(LOCTEXT("FocusDistLabel", "Focus Distance (cm)"))]
-										+ SHorizontalBox::Slot().FillWidth(0.6f).VAlign(VAlign_Center)
-										[
-											SNew(SSpinBox<float>)
-												.MinValue(1.0f)
-												.MaxValue(100000.0f)
-												.Delta(10.0f)
-												.MinFractionalDigits(1)
-												.MaxFractionalDigits(1)
-												.Value_Lambda([Settings]() -> float
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return (Comp && Comp->CameraToControl) ? Comp->CameraToControl->FocusSettings.ManualFocusDistance : 200.0f;
-													})
-												.OnValueChanged_Lambda([Settings](float NewValue)
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp && Comp->CameraToControl)
-															Comp->CameraToControl->FocusSettings.ManualFocusDistance = NewValue;
-													})
-										]
-								]
+	+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(0.35f).VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("DL", "Tracking Delay (ms)"))]
+		+ SHorizontalBox::Slot().FillWidth(0.65f)
+		[SNew(SSpinBox<float>).MinValue(0).MaxValue(10000)
+		.Value_Lambda([GC]() -> float { auto* C = GC(); return C ? C->TrackingDelayMs : 0; })
+		.OnValueChanged_Lambda([GC](float V) { auto* C = GC(); if (C) C->TrackingDelayMs = V; })]]
 
-							// ---- Sensor Width (manual input) ----
-							+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
-										[SNew(STextBlock).Text(LOCTEXT("SensorWLabel", "Sensor Width (mm)"))]
-										+ SHorizontalBox::Slot().FillWidth(0.6f).VAlign(VAlign_Center)
-										[
-											SNew(SSpinBox<float>)
-												.MinValue(1.0f)
-												.MaxValue(100.0f)
-												.Delta(0.1f)
-												.MinFractionalDigits(3)
-												.MaxFractionalDigits(6)
-												.Value_Lambda([Settings]() -> float
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return (Comp && Comp->CameraToControl) ? Comp->CameraToControl->Filmback.SensorWidth : 36.0f;
-													})
-												.OnValueChanged_Lambda([Settings](float NewValue)
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp && Comp->CameraToControl)
-														{
-															FCameraFilmbackSettings Filmback = Comp->CameraToControl->Filmback;
-															Filmback.SensorWidth = NewValue;
-															Comp->CameraToControl->Filmback = Filmback;
-														}
-													})
-										]
-								]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 5, 0, 2)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 4, 0)[SNew(STextBlock).Text(LOCTEXT("AC", "Auto-Connect:"))]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 14, 0)
+		[SNew(SCheckBox).IsChecked_Lambda([Settings, GC]() { auto* C = GC(); return (C && Settings->ShouldAutoConnect(C->LiveLinkSubjectName.ToString())) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; }).OnCheckStateChanged_Lambda([Settings, GC](ECheckBoxState S) { auto* C = GC(); if (C) Settings->SetAutoConnect(C->LiveLinkSubjectName.ToString(), S == ECheckBoxState::Checked); })]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 4, 0)[SNew(STextBlock).Text(LOCTEXT("Tk", "Tracking:"))]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 14, 0)
+		[SNew(SCheckBox).IsChecked_Lambda([GC]() { auto* C = GC(); return (C && C->bEnableTracking) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; }).OnCheckStateChanged_Lambda([GC](ECheckBoxState S) { auto* C = GC(); if (C) { C->bEnableTracking = (S == ECheckBoxState::Checked); if (C->bEnableTracking) C->ResetTrackingOrigin(); } })]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 4, 0)[SNew(STextBlock).Text(LOCTEXT("Fz", "Freeze:"))]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[SNew(SCheckBox).IsChecked_Lambda([GC]() { auto* C = GC(); return (C && C->bFreezeTracking) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; }).OnCheckStateChanged_Lambda([GC](ECheckBoxState S) { auto* C = GC(); if (C) C->bFreezeTracking = (S == ECheckBoxState::Checked); }).IsEnabled_Lambda([GC]() { auto* C = GC(); return C && C->IsRobotConnected(); })]]
 
-							// ---- Sensor Height (manual input) ----
-							+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
-										[SNew(STextBlock).Text(LOCTEXT("SensorHLabel", "Sensor Height (mm)"))]
-										+ SHorizontalBox::Slot().FillWidth(0.6f).VAlign(VAlign_Center)
-										[
-											SNew(SSpinBox<float>)
-												.MinValue(1.0f)
-												.MaxValue(100.0f)
-												.Delta(0.1f)
-												.MinFractionalDigits(1)
-												.MaxFractionalDigits(3)
-												.Value_Lambda([Settings]() -> float
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return (Comp && Comp->CameraToControl) ? Comp->CameraToControl->Filmback.SensorHeight : 24.0f;
-													})
-												.OnValueChanged_Lambda([Settings](float NewValue)
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp && Comp->CameraToControl)
-														{
-															FCameraFilmbackSettings Filmback = Comp->CameraToControl->Filmback;
-															Filmback.SensorHeight = NewValue;
-															Comp->CameraToControl->Filmback = Filmback;
-														}
-													})
-										]
-								]
-						]
-					// ========== DOBOT CONNECTION ==========
-					+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 10, 0, 5)
-						[
-							SNew(SSeparator)
-						]
+	+ SVerticalBox::Slot().AutoHeight().Padding(0, 5, 0, 0)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 5, 0)
+		[SNew(SButton).Text(LOCTEXT("Cn", "Connect")).OnClicked_Lambda([GC]() { auto* C = GC(); if (C) C->ConnectToRobot(); return FReply::Handled(); }).IsEnabled_Lambda([GC]() { auto* C = GC(); return C && C->GetConnectionState() != EDobotConnectionState::Connected; })]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 5, 0)
+		[SNew(SButton).Text(LOCTEXT("Dc", "Disconnect")).OnClicked_Lambda([GC]() { auto* C = GC(); if (C) C->DisconnectFromRobot(); return FReply::Handled(); }).IsEnabled_Lambda([GC]() { auto* C = GC(); return C && (C->GetConnectionState() == EDobotConnectionState::Connected || C->GetConnectionState() == EDobotConnectionState::Reconnecting); })]
+		+ SHorizontalBox::Slot().AutoWidth()
+		[SNew(SButton).Text(LOCTEXT("Rm", "Remove Source")).OnClicked_Lambda([GC]() { auto* C = GC(); if (C) { C->DisconnectFromRobot(); C->bHasRobotConnection = false; } return FReply::Handled(); })]]]
 
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 5)
-						[
-							SNew(SHorizontalBox)
-								+ SHorizontalBox::Slot()
-								.AutoWidth()
-								.VAlign(VAlign_Center)
-								.Padding(0, 0, 5, 0)
-								[
-									SNew(STextBlock)
-										.Text(LOCTEXT("ConnectionHeader", "Dobot Connection"))
-										.Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
-								]
-								+ SHorizontalBox::Slot()
-								.AutoWidth()
-								.VAlign(VAlign_Center)
-								.Padding(0, 0, 5, 0)
-								[
-									SNew(SBox)
-										.WidthOverride(10)
-										.HeightOverride(10)
-										[
-											SNew(SImage)
-												.ColorAndOpacity_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														EDobotConnectionState State = Comp ? Comp->GetConnectionState() : EDobotConnectionState::NoConnection;
-														return GetConnectionStateColor(State);
-													})
-												.Image(FAppStyle::GetBrush("Icons.FilledCircle"))
-										]
-								]
-							+ SHorizontalBox::Slot()
-								.AutoWidth()
-								.VAlign(VAlign_Center)
-								[
-									SNew(STextBlock)
-										.Text_Lambda([Settings]()
-											{
-												UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-												EDobotConnectionState State = Comp ? Comp->GetConnectionState() : EDobotConnectionState::NoConnection;
-												return GetConnectionStateText(State);
-											})
-										.ColorAndOpacity_Lambda([Settings]()
-											{
-												UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-												EDobotConnectionState State = Comp ? Comp->GetConnectionState() : EDobotConnectionState::NoConnection;
-												return FSlateColor(GetConnectionStateColor(State));
-											})
-										.Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
-								]
-						]
+	// ===== POSITION & ROTATION (read-only from FreeD) =====
+	+ SVerticalBox::Slot().AutoHeight().Padding(0, 15, 0, 5)[SNew(SSeparator)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
+		[SNew(STextBlock).Text(LOCTEXT("PR", "Position & Rotation")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))]
 
-					// Add Connection button
-					+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 5)
-						[
-							SNew(SButton)
-								.Text(LOCTEXT("AddConnection", "Add Dobot Connection"))
-								.HAlign(HAlign_Center)
-								.OnClicked_Lambda([Settings]()
-									{
-										UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-										if (Comp) Comp->bHasRobotConnection = true;
-										return FReply::Handled();
-									})
-								.Visibility_Lambda([Settings]()
-									{
-										UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-										return (Comp && !Comp->bHasRobotConnection) ? EVisibility::Visible : EVisibility::Collapsed;
-									})
-						]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Pan", "Pan (Yaw)"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%.3f\xB0"), GF().Pan)) : LOCTEXT("D", "--"); }, Live)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Tilt", "Tilt (Pitch)"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%.3f\xB0"), GF().Tilt)) : LOCTEXT("D", "--"); }, Live)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Roll", "Roll"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%.3f\xB0"), GF().Roll)) : LOCTEXT("D", "--"); }, Live)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("X", "X (mm)"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%.1f"), GF().PosX_mm)) : LOCTEXT("D", "--"); }, Live)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Y", "Y (mm)"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%.1f"), GF().PosY_mm)) : LOCTEXT("D", "--"); }, Live)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Z", "Z (mm)"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%.1f"), GF().PosZ_mm)) : LOCTEXT("D", "--"); }, Live)]
 
-					// Connection settings
-					+ SVerticalBox::Slot()
-						.AutoHeight()
-						[
-							SNew(SVerticalBox)
-								.Visibility_Lambda([Settings]()
-									{
-										UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-										return (Comp && Comp->bHasRobotConnection) ? EVisibility::Visible : EVisibility::Collapsed;
-									})
+		// ===== LENS DATA (read-only from FreeD) =====
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 15, 0, 5)[SNew(SSeparator)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
+		[SNew(STextBlock).Text(LOCTEXT("LD", "Lens Data")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))]
 
-								// IP Address
-								+ SVerticalBox::Slot()
-								.AutoHeight()
-								.Padding(0, 2)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot()
-										.FillWidth(0.4f)
-										.VAlign(VAlign_Center)
-										[
-											SNew(STextBlock).Text(LOCTEXT("IPLabel", "Dobot IP Address"))
-										]
-										+ SHorizontalBox::Slot()
-										.FillWidth(0.6f)
-										[
-											SNew(SEditableTextBox)
-												.Text_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return Comp ? FText::FromString(Comp->RobotIPAddress) : FText::GetEmpty();
-													})
-												.OnTextCommitted_Lambda([Settings](const FText& NewText, ETextCommit::Type CommitType)
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp && !Comp->IsRobotConnected()) Comp->RobotIPAddress = NewText.ToString();
-													})
-												.IsEnabled_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return Comp && !Comp->IsRobotConnected();
-													})
-										]
-								]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("FL", "Focal Length"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%d"), GF().ZoomRaw)) : LOCTEXT("D", "--"); }, Live)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Ap", "Aperture"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%d"), GF().IrisRaw)) : LOCTEXT("D", "--"); }, Live)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("FD", "Focus Distance"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%d"), GF().FocusRaw)) : LOCTEXT("D", "--"); }, Live)]
 
-							// Port
-							+ SVerticalBox::Slot()
-								.AutoHeight()
-								.Padding(0, 2)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot()
-										.FillWidth(0.4f)
-										.VAlign(VAlign_Center)
-										[
-											SNew(STextBlock).Text(LOCTEXT("PortLabel", "Dobot Port"))
-										]
-										+ SHorizontalBox::Slot()
-										.FillWidth(0.6f)
-										[
-											SNew(SSpinBox<int32>)
-												.MinValue(1)
-												.MaxValue(65535)
-												.Value_Lambda([Settings]() -> int32
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return Comp ? Comp->RobotPort : 30004;
-													})
-												.OnValueChanged_Lambda([Settings](int32 NewValue)
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp && !Comp->IsRobotConnected()) Comp->RobotPort = NewValue;
-													})
-												.IsEnabled_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return Comp && !Comp->IsRobotConnected();
-													})
-										]
-								]
+		// ===== SENSOR (editable) =====
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 15, 0, 5)[SNew(SSeparator)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
+		[SNew(STextBlock).Text(LOCTEXT("SH", "Sensor")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))]
 
-							// Tracking Delay
-							+ SVerticalBox::Slot()
-								.AutoHeight()
-								.Padding(0, 2)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot()
-										.FillWidth(0.4f)
-										.VAlign(VAlign_Center)
-										[
-											SNew(STextBlock).Text(LOCTEXT("DelayLabel", "Tracking Delay (ms)"))
-										]
-										+ SHorizontalBox::Slot()
-										.FillWidth(0.6f)
-										[
-											SNew(SSpinBox<float>)
-												.MinValue(0.0f)
-												.MaxValue(10000.0f)
-												.Value_Lambda([Settings]() -> float
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return Comp ? Comp->TrackingDelayMs : 0.0f;
-													})
-												.OnValueChanged_Lambda([Settings](float NewValue)
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp) Comp->TrackingDelayMs = NewValue;
-													})
-										]
-								]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("SW", "Width (mm)"))]
+		+ SHorizontalBox::Slot().FillWidth(0.6f)
+		[SNew(SSpinBox<float>).MinValue(1).MaxValue(100).Delta(0.01f).MinFractionalDigits(2).MaxFractionalDigits(3)
+		.Value_Lambda([GC]() -> float { auto* C = GC(); return (C && C->CameraToControl) ? C->CameraToControl->Filmback.SensorWidth : 35.6f; })
+		.OnValueChanged_Lambda([GC](float V) { auto* C = GC(); if (C && C->CameraToControl) { auto F = C->CameraToControl->Filmback; F.SensorWidth = V; C->CameraToControl->Filmback = F; } })]]
 
-							// Auto-Connect checkbox
-							+ SVerticalBox::Slot()
-								.AutoHeight()
-								.Padding(0, 5, 0, 2)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot()
-										.AutoWidth()
-										.VAlign(VAlign_Center)
-										.Padding(0, 0, 10, 0)
-										[
-											SNew(STextBlock).Text(LOCTEXT("AutoConnectLabel", "Auto-Connect:"))
-										]
-										+ SHorizontalBox::Slot()
-										.AutoWidth()
-										.VAlign(VAlign_Center)
-										[
-											SNew(SCheckBox)
-												.IsChecked_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (!Comp) return ECheckBoxState::Unchecked;
-														return Settings->ShouldAutoConnect(Comp->LiveLinkSubjectName.ToString())
-															? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-													})
-												.OnCheckStateChanged_Lambda([Settings](ECheckBoxState NewState)
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp)
-														{
-															Settings->SetAutoConnect(Comp->LiveLinkSubjectName.ToString(), NewState == ECheckBoxState::Checked);
-														}
-													})
-										]
-								]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("SHt", "Height (mm)"))]
+		+ SHorizontalBox::Slot().FillWidth(0.6f)
+		[SNew(SSpinBox<float>).MinValue(1).MaxValue(100).Delta(0.01f).MinFractionalDigits(2).MaxFractionalDigits(3)
+		.Value_Lambda([GC]() -> float { auto* C = GC(); return (C && C->CameraToControl) ? C->CameraToControl->Filmback.SensorHeight : 23.8f; })
+		.OnValueChanged_Lambda([GC](float V) { auto* C = GC(); if (C && C->CameraToControl) { auto F = C->CameraToControl->Filmback; F.SensorHeight = V; C->CameraToControl->Filmback = F; } })]]
 
-							// Enable Tracking checkbox
-							+ SVerticalBox::Slot()
-								.AutoHeight()
-								.Padding(0, 5, 0, 5)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot()
-										.AutoWidth()
-										.VAlign(VAlign_Center)
-										.Padding(0, 0, 10, 0)
-										[
-											SNew(STextBlock).Text(LOCTEXT("TrackingLabel", "Enable Tracking:"))
-										]
-										+ SHorizontalBox::Slot()
-										.AutoWidth()
-										.VAlign(VAlign_Center)
-										[
-											SNew(SCheckBox)
-												.IsChecked_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return (Comp && Comp->bEnableTracking) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-													})
-												.OnCheckStateChanged_Lambda([Settings](ECheckBoxState NewState)
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp)
-														{
-															Comp->bEnableTracking = (NewState == ECheckBoxState::Checked);
-															if (Comp->bEnableTracking) Comp->ResetTrackingOrigin();
-														}
-													})
-										]
-								]
-
-							// Connect / Disconnect / Remove buttons
-							+ SVerticalBox::Slot()
-								.AutoHeight()
-								.Padding(0, 5, 0, 0)
-								[
-									SNew(SHorizontalBox)
-										+ SHorizontalBox::Slot()
-										.AutoWidth()
-										.Padding(0, 0, 5, 0)
-										[
-											SNew(SButton)
-												.Text(LOCTEXT("ConnectBtn", "Connect"))
-												.OnClicked_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp) Comp->ConnectToRobot();
-														return FReply::Handled();
-													})
-												.IsEnabled_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return Comp && Comp->GetConnectionState() != EDobotConnectionState::Connected;
-													})
-										]
-									+ SHorizontalBox::Slot()
-										.AutoWidth()
-										.Padding(0, 0, 5, 0)
-										[
-											SNew(SButton)
-												.Text(LOCTEXT("DisconnectBtn", "Disconnect"))
-												.OnClicked_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp) Comp->DisconnectFromRobot();
-														return FReply::Handled();
-													})
-												.IsEnabled_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														return Comp && (Comp->GetConnectionState() == EDobotConnectionState::Connected
-															|| Comp->GetConnectionState() == EDobotConnectionState::Reconnecting);
-													})
-										]
-									+ SHorizontalBox::Slot()
-										.AutoWidth()
-										[
-											SNew(SButton)
-												.Text(LOCTEXT("RemoveConnBtn", "Remove Connection"))
-												.OnClicked_Lambda([Settings]()
-													{
-														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
-														if (Comp)
-														{
-															Comp->DisconnectFromRobot();
-															Comp->bHasRobotConnection = false;
-														}
-														return FReply::Handled();
-													})
-										]
-								]
-						]
-
-					// ========== DECKLINK OUTPUT (GLOBAL) ==========
-					+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 15, 0, 5)
-						[
-							SNew(SSeparator)
-						]
-
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 5)
-						[
-							SNew(STextBlock)
-								.Text(LOCTEXT("DeckLinkHeader", "DeckLink Output"))
-								.Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
-						]
-
-						// Number of outputs
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 5)
-						[
-							SNew(SHorizontalBox)
-								+ SHorizontalBox::Slot()
-								.AutoWidth()
-								.VAlign(VAlign_Center)
-								.Padding(0, 0, 10, 0)
-								[
-									SNew(STextBlock).Text(LOCTEXT("NumOutputsLabel", "Number of Outputs:"))
-								]
-								+ SHorizontalBox::Slot()
-								.AutoWidth()
-								.VAlign(VAlign_Center)
-								[
-									SNew(SSpinBox<int32>)
-										.MinValue(1)
-										.MaxValue(8)
-										.MinDesiredWidth(60)
-										.Value_Lambda([Settings]() -> int32
-											{
-												return Settings->GetNumOutputPorts();
-											})
-										.OnValueCommitted_Lambda([this, Settings](int32 NewValue, ETextCommit::Type CommitType)
-											{
-												Settings->SetNumOutputPorts(NewValue);
-
-												// Rebuild port rows
-												if (DeckLinkPortsBox.IsValid())
-												{
-													TSharedPtr<SVerticalBox> Box = DeckLinkPortsBox.Pin();
-													Box->ClearChildren();
-													for (int32 i = 0; i < NewValue; i++)
-													{
-														Box->AddSlot()
-															.AutoHeight()
-															[
-																BuildDeckLinkPortRow(i, Settings)
-															];
-													}
-												}
-											})
-								]
-						]
-
-					// Port rows
-					+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 5, 0, 10)
-						[
-							DeckLinkPortsContainer
-						]
-				]
-		];
+		// ===== DECKLINK =====
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 15, 0, 5)[SNew(SSeparator)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
+		[SNew(STextBlock).Text(LOCTEXT("DH", "DeckLink Output")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0, 0, 10, 0)[SNew(STextBlock).Text(LOCTEXT("NO", "Outputs:"))]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[SNew(SSpinBox<int32>).MinValue(1).MaxValue(8).MinDesiredWidth(60)
+		.Value_Lambda([Settings]() -> int32 { return Settings->GetNumOutputPorts(); })
+		.OnValueCommitted_Lambda([this, Settings](int32 V, ETextCommit::Type) { Settings->SetNumOutputPorts(V); if (DeckLinkPortsBox.IsValid()) { auto B = DeckLinkPortsBox.Pin(); B->ClearChildren(); for (int32 i = 0; i < V; i++) B->AddSlot().AutoHeight()[BuildDeckLinkPortRow(i, Settings)]; } })]]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 5, 0, 10)[DLPorts]
+		]];
 }
 
 #undef LOCTEXT_NAMESPACE

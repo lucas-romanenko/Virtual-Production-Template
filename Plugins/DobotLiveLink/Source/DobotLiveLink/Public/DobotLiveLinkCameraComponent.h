@@ -27,7 +27,7 @@ public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	virtual void BeginPlay() override;
 
-	// ---- LiveLink Settings ----
+	// ---- LiveLink ----
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LiveLink")
 	FName LiveLinkSubjectName = TEXT("DobotCamera");
@@ -35,21 +35,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LiveLink")
 	UCineCameraComponent* CameraToControl;
 
-	// ---- Robot Connection Settings (per-camera) ----
+	// ---- FreeD Source ----
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Robot Connection")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FreeD Source")
 	bool bHasRobotConnection = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Robot Connection", meta = (EditCondition = "bHasRobotConnection"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FreeD Source", meta = (EditCondition = "bHasRobotConnection"))
 	FString RobotIPAddress = TEXT("192.168.5.1");
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Robot Connection", meta = (EditCondition = "bHasRobotConnection", ClampMin = "1", ClampMax = "65535"))
-	int32 RobotPort = 30004;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FreeD Source", meta = (EditCondition = "bHasRobotConnection", ClampMin = "1", ClampMax = "65535"))
+	int32 RobotPort = 40000;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Robot Connection", meta = (EditCondition = "bHasRobotConnection", ClampMin = "0.0", ClampMax = "10000.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FreeD Source", meta = (EditCondition = "bHasRobotConnection", ClampMin = "0.0", ClampMax = "10000.0"))
 	float TrackingDelayMs = 0.0f;
 
-	// ---- Tracking Control ----
+	// ---- Tracking ----
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tracking")
 	bool bEnableTracking = false;
@@ -57,19 +57,24 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tracking")
 	bool bShowDebugInfo = true;
 
-	// ---- Connection Methods ----
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tracking")
+	bool bFreezeTracking = false;
 
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Robot Connection")
+	// ---- Connection ----
+
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "FreeD Source")
 	bool ConnectToRobot();
 
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Robot Connection")
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "FreeD Source")
 	void DisconnectFromRobot();
 
-	UFUNCTION(BlueprintCallable, Category = "Robot Connection")
+	UFUNCTION(BlueprintCallable, Category = "FreeD Source")
 	bool IsRobotConnected() const { return bIsRobotConnected; }
 
-	UFUNCTION(BlueprintCallable, Category = "Robot Connection")
+	UFUNCTION(BlueprintCallable, Category = "FreeD Source")
 	EDobotConnectionState GetConnectionState() const;
+
+	TSharedPtr<FDobotLiveLinkSource> GetConnectedSource() const { return ConnectedSource; }
 
 	void FindCamera();
 	void ResetTrackingOrigin();
@@ -84,12 +89,10 @@ private:
 	bool bHasRecordedStart = false;
 	FTransform CameraStartTransform;
 	FTransform RobotStartTransform;
-	FTransform LastRobotTransform;
 
 	bool bIsRobotConnected = false;
 	TSharedPtr<FDobotLiveLinkSource> ConnectedSource;
 
-	// Auto-reconnect state
 	bool bIsReconnecting = false;
 	float ReconnectTimer = 0.0f;
 	float ReconnectLogTimer = 0.0f;

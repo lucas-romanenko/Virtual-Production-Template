@@ -3,7 +3,7 @@
 	"Version": 1,
 	"VersionName": "1.0",
 	"FriendlyName": "Dobot LiveLink",
-	"Description": "LiveLink plugin for Dobot Nova 5 robot camera tracking",
+	"Description": "LiveLink plugin for FreeD camera tracking data (Lensmaster, robot arms, PTZ cameras)",
 	"Category": "Virtual Production",
 	"CreatedBy": "Lucas Romanenko",
 	"CreatedByURL": "https://lucas.romanenko.com",

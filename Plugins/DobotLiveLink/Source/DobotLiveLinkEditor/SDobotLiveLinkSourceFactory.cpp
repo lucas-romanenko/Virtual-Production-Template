@@ -45,7 +45,7 @@ void SDobotLiveLinkSourceFactory::Construct(const FArguments& InArgs)
 								.VAlign(VAlign_Center)
 								[
 									SNew(STextBlock)
-										.Text(LOCTEXT("IPAddress", "Robot IP Address"))
+										.Text(LOCTEXT("IPAddress", "FreeD Source IP"))
 								]
 								+ SHorizontalBox::Slot()
 								.FillWidth(0.6f)
@@ -67,7 +67,7 @@ void SDobotLiveLinkSourceFactory::Construct(const FArguments& InArgs)
 								.VAlign(VAlign_Center)
 								[
 									SNew(STextBlock)
-										.Text(LOCTEXT("Port", "Port Number"))
+										.Text(LOCTEXT("Port", "UDP Listen Port"))
 								]
 								+ SHorizontalBox::Slot()
 								.FillWidth(0.6f)
