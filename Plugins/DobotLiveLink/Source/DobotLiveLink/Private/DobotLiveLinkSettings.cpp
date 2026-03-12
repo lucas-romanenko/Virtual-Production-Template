@@ -4,6 +4,7 @@
 #include "CineCameraActor.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
+#include "Engine/Engine.h"
 #include "MediaCapture.h"
 #include "MediaOutput.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -209,7 +210,9 @@ ACineCameraActor* UDobotLiveLinkSettings::SpawnDobotCamera()
 	if (!NewCamera) return nullptr;
 
 	FString NextSubjectName = GetNextAvailableSubjectName();
+#if WITH_EDITOR
 	NewCamera->SetActorLabel(NextSubjectName);
+#endif
 
 	UDobotLiveLinkCameraComponent* DobotComp = NewObject<UDobotLiveLinkCameraComponent>(NewCamera, UDobotLiveLinkCameraComponent::StaticClass(), FName(TEXT("DobotLiveLinkCamera")));
 	if (DobotComp)

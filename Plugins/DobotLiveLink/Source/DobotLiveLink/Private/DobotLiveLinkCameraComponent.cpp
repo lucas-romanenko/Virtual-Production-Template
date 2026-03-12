@@ -1,6 +1,7 @@
 #include "DobotLiveLinkCameraComponent.h"
 #include "DobotLiveLinkSource.h"
 #include "DobotLiveLinkSettings.h"
+#include "Features/IModularFeatures.h"
 #include "ILiveLinkClient.h"
 #include "LiveLinkClientReference.h"
 #include "Roles/LiveLinkCameraRole.h"
