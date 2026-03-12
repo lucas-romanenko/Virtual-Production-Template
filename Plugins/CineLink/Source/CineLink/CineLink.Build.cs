@@ -1,8 +1,8 @@
 using UnrealBuildTool;
 
-public class DobotLiveLink : ModuleRules
+public class CineLink : ModuleRules
 {
-    public DobotLiveLink(ReadOnlyTargetRules Target) : base(Target)
+    public CineLink(ReadOnlyTargetRules Target) : base(Target)
     {
         PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
@@ -15,8 +15,6 @@ public class DobotLiveLink : ModuleRules
                 "LiveLink",
                 "LiveLinkInterface",
                 "LiveLinkComponents",
-                "Networking",
-                "Sockets",
                 "CinematicCamera",
                 "MediaIOCore"
             }

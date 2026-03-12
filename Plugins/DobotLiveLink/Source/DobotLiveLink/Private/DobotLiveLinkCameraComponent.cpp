@@ -3,8 +3,8 @@
 #include "DobotLiveLinkSettings.h"
 #include "ILiveLinkClient.h"
 #include "LiveLinkClientReference.h"
-#include "Roles/LiveLinkTransformRole.h"
-#include "Roles/LiveLinkTransformTypes.h"
+#include "Roles/LiveLinkCameraRole.h"
+#include "Roles/LiveLinkCameraTypes.h"
 #include "Engine/Engine.h"
 #include "EngineUtils.h"
 #include "CineCameraActor.h"
@@ -377,12 +377,26 @@ void UDobotLiveLinkCameraComponent::TickComponent(float DeltaTime, ELevelTick Ti
 	FLiveLinkSubjectName SubjectName(LiveLinkSubjectName);
 	FLiveLinkSubjectFrameData FrameData;
 
-	if (LiveLinkClient->EvaluateFrame_AnyThread(SubjectName, ULiveLinkTransformRole::StaticClass(), FrameData))
+	if (LiveLinkClient->EvaluateFrame_AnyThread(SubjectName, ULiveLinkCameraRole::StaticClass(), FrameData))
 	{
-		FLiveLinkTransformFrameData* TransformData = FrameData.FrameData.Cast<FLiveLinkTransformFrameData>();
-		if (TransformData)
+		FLiveLinkCameraFrameData* CameraData = FrameData.FrameData.Cast<FLiveLinkCameraFrameData>();
+		if (CameraData)
 		{
-			FTransform CurrentRobotTransform = TransformData->Transform;
+			FTransform CurrentRobotTransform = CameraData->Transform;
+
+			// ---- Apply lens data ----
+			if (CameraData->FocalLength > 0.0f)
+			{
+				CameraToControl->CurrentFocalLength = CameraData->FocalLength;
+			}
+			if (CameraData->Aperture > 0.0f)
+			{
+				CameraToControl->CurrentAperture = CameraData->Aperture;
+			}
+			if (CameraData->FocusDistance > 0.0f)
+			{
+				CameraToControl->FocusSettings.ManualFocusDistance = CameraData->FocusDistance;
+			}
 
 			if (!bHasRecordedStart)
 			{

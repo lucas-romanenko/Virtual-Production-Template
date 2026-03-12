@@ -264,19 +264,6 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 	// Ensure ActiveCaptures array is sized
 	Settings->SetNumOutputPorts(Settings->GetNumOutputPorts());
 
-	FPropertyEditorModule& PropertyEditorModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
-
-	FDetailsViewArgs DetailsViewArgs;
-	DetailsViewArgs.bAllowSearch = false;
-	DetailsViewArgs.bShowOptions = false;
-	DetailsViewArgs.bShowPropertyMatrixButton = false;
-	DetailsViewArgs.bUpdatesFromSelection = false;
-	DetailsViewArgs.bLockable = false;
-	DetailsViewArgs.NameAreaSettings = FDetailsViewArgs::HideNameArea;
-
-	TSharedRef<IDetailsView> DetailsView = PropertyEditorModule.CreateDetailView(DetailsViewArgs);
-	DetailsView->SetObject(Settings);
-	CachedDetailsView = DetailsView;
 
 	// Build DeckLink port rows container
 	TSharedRef<SVerticalBox> DeckLinkPortsContainer = SNew(SVerticalBox);
@@ -481,12 +468,166 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 						// ========== CAMERA SETTINGS ==========
 						+ SVerticalBox::Slot()
 						.AutoHeight()
+						.Padding(0, 0, 0, 5)
 						[
-							DetailsView
+							SNew(STextBlock)
+								.Text(LOCTEXT("CameraSettingsHeader", "Camera Settings"))
+								.Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
 						]
 
-						// ========== DOBOT CONNECTION ==========
 						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 8)
+						[
+							SNew(SVerticalBox)
+
+								// ---- Focal Length (read-only, driven by FreeD zoom) ----
+								+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+								[
+									SNew(SHorizontalBox)
+										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+										[SNew(STextBlock).Text(LOCTEXT("FocalLengthLabel", "Focal Length (mm)"))]
+										+ SHorizontalBox::Slot().FillWidth(0.6f).VAlign(VAlign_Center)
+										[
+											SNew(STextBlock)
+												.Text_Lambda([Settings]()
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														if (Comp && Comp->CameraToControl)
+															return FText::FromString(FString::Printf(TEXT("%.3f"), Comp->CameraToControl->CurrentFocalLength));
+														return FText::FromString(TEXT("--"));
+													})
+												.ColorAndOpacity_Lambda([Settings]()
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														bool bLive = Comp && Comp->IsRobotConnected() && Comp->CameraToControl;
+														return FSlateColor(bLive ? FLinearColor::Green : FLinearColor(0.5f, 0.5f, 0.5f));
+													})
+										]
+								]
+
+							// ---- Aperture (manual input) ----
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+								[
+									SNew(SHorizontalBox)
+										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+										[SNew(STextBlock).Text(LOCTEXT("ApertureLabel", "Aperture (f-stop)"))]
+										+ SHorizontalBox::Slot().FillWidth(0.6f).VAlign(VAlign_Center)
+										[
+											SNew(SSpinBox<float>)
+												.MinValue(1.0f)
+												.MaxValue(32.0f)
+												.Delta(0.1f)
+												.MinFractionalDigits(1)
+												.MaxFractionalDigits(3)
+												.Value_Lambda([Settings]() -> float
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														return (Comp && Comp->CameraToControl) ? Comp->CameraToControl->CurrentAperture : 2.8f;
+													})
+												.OnValueChanged_Lambda([Settings](float NewValue)
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														if (Comp && Comp->CameraToControl)
+															Comp->CameraToControl->CurrentAperture = NewValue;
+													})
+										]
+								]
+
+							// ---- Focus Distance (manual input) ----
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+								[
+									SNew(SHorizontalBox)
+										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+										[SNew(STextBlock).Text(LOCTEXT("FocusDistLabel", "Focus Distance (cm)"))]
+										+ SHorizontalBox::Slot().FillWidth(0.6f).VAlign(VAlign_Center)
+										[
+											SNew(SSpinBox<float>)
+												.MinValue(1.0f)
+												.MaxValue(100000.0f)
+												.Delta(10.0f)
+												.MinFractionalDigits(1)
+												.MaxFractionalDigits(1)
+												.Value_Lambda([Settings]() -> float
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														return (Comp && Comp->CameraToControl) ? Comp->CameraToControl->FocusSettings.ManualFocusDistance : 200.0f;
+													})
+												.OnValueChanged_Lambda([Settings](float NewValue)
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														if (Comp && Comp->CameraToControl)
+															Comp->CameraToControl->FocusSettings.ManualFocusDistance = NewValue;
+													})
+										]
+								]
+
+							// ---- Sensor Width (manual input) ----
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+								[
+									SNew(SHorizontalBox)
+										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+										[SNew(STextBlock).Text(LOCTEXT("SensorWLabel", "Sensor Width (mm)"))]
+										+ SHorizontalBox::Slot().FillWidth(0.6f).VAlign(VAlign_Center)
+										[
+											SNew(SSpinBox<float>)
+												.MinValue(1.0f)
+												.MaxValue(100.0f)
+												.Delta(0.1f)
+												.MinFractionalDigits(3)
+												.MaxFractionalDigits(6)
+												.Value_Lambda([Settings]() -> float
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														return (Comp && Comp->CameraToControl) ? Comp->CameraToControl->Filmback.SensorWidth : 36.0f;
+													})
+												.OnValueChanged_Lambda([Settings](float NewValue)
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														if (Comp && Comp->CameraToControl)
+														{
+															FCameraFilmbackSettings Filmback = Comp->CameraToControl->Filmback;
+															Filmback.SensorWidth = NewValue;
+															Comp->CameraToControl->Filmback = Filmback;
+														}
+													})
+										]
+								]
+
+							// ---- Sensor Height (manual input) ----
+							+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+								[
+									SNew(SHorizontalBox)
+										+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)
+										[SNew(STextBlock).Text(LOCTEXT("SensorHLabel", "Sensor Height (mm)"))]
+										+ SHorizontalBox::Slot().FillWidth(0.6f).VAlign(VAlign_Center)
+										[
+											SNew(SSpinBox<float>)
+												.MinValue(1.0f)
+												.MaxValue(100.0f)
+												.Delta(0.1f)
+												.MinFractionalDigits(1)
+												.MaxFractionalDigits(3)
+												.Value_Lambda([Settings]() -> float
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														return (Comp && Comp->CameraToControl) ? Comp->CameraToControl->Filmback.SensorHeight : 24.0f;
+													})
+												.OnValueChanged_Lambda([Settings](float NewValue)
+													{
+														UDobotLiveLinkCameraComponent* Comp = Settings->GetSelectedDobotComponent();
+														if (Comp && Comp->CameraToControl)
+														{
+															FCameraFilmbackSettings Filmback = Comp->CameraToControl->Filmback;
+															Filmback.SensorHeight = NewValue;
+															Comp->CameraToControl->Filmback = Filmback;
+														}
+													})
+										]
+								]
+						]
+					// ========== DOBOT CONNECTION ==========
+					+ SVerticalBox::Slot()
 						.AutoHeight()
 						.Padding(0, 10, 0, 5)
 						[
