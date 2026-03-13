@@ -28,10 +28,15 @@ struct FFreeDFrameData
 	float PosY_mm = 0;     // mm
 	float PosZ_mm = 0;     // mm
 
-	// Lens (raw 24-bit signed ints from the packet)
+	// Lens: raw 24-bit signed ints from the packet
 	int32 ZoomRaw = 0;     // bytes 20-22
 	int32 FocusRaw = 0;    // bytes 23-25
 	int32 IrisRaw = 0;     // byte 26
+
+	// Lens: decoded real values (True Value mode: /32768 for zoom/focus, /10 for iris)
+	float FocalLength_mm = 0;    // 0 means no data (e.g. prime lens)
+	float FocusDistance_cm = 0;  // cm for UE (converted from m)
+	float Aperture = 0;          // t-stop or f-stop
 
 	FTransform Transform = FTransform::Identity;
 };

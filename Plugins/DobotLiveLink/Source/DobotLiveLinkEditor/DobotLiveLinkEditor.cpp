@@ -260,11 +260,46 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 		+ SHorizontalBox::Slot().AutoWidth()
 		[SNew(SButton).Text(LOCTEXT("Rm", "Remove Source")).OnClicked_Lambda([GC]() { auto* C = GC(); if (C) { C->DisconnectFromRobot(); C->bHasRobotConnection = false; } return FReply::Handled(); })]]]
 
-	// ===== POSITION & ROTATION (read-only from FreeD) =====
+	// ===== CAMERA SETTINGS (match to physical camera) =====
 	+ SVerticalBox::Slot().AutoHeight().Padding(0, 15, 0, 5)[SNew(SSeparator)]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
-		[SNew(STextBlock).Text(LOCTEXT("PR", "Position & Rotation")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))]
+		[SNew(STextBlock).Text(LOCTEXT("CS", "Camera Settings")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
+		[SNew(STextBlock).Text(LOCTEXT("CSH", "Match these to your physical camera and lens.")).Font(FCoreStyle::GetDefaultFontStyle("Italic", 8)).ColorAndOpacity(FSlateColor(DimColor))]
 
+		// Focal Length
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("FL", "Focal Length (mm)"))]
+		+ SHorizontalBox::Slot().FillWidth(0.6f)
+		[SNew(SSpinBox<float>).MinValue(4).MaxValue(1000).Delta(1).MinFractionalDigits(0).MaxFractionalDigits(0)
+		.Value_Lambda([GC]() -> float { auto* C = GC(); return (C && C->CameraToControl) ? C->CameraToControl->CurrentFocalLength : 24; })
+		.OnValueChanged_Lambda([GC](float V) { auto* C = GC(); if (C && C->CameraToControl) C->CameraToControl->CurrentFocalLength = V; })]]
+
+		// Sensor Width
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("SW", "Sensor Width (mm)"))]
+		+ SHorizontalBox::Slot().FillWidth(0.6f)
+		[SNew(SSpinBox<float>).MinValue(1).MaxValue(100).Delta(0.01f).MinFractionalDigits(2).MaxFractionalDigits(3)
+		.Value_Lambda([GC]() -> float { auto* C = GC(); return (C && C->CameraToControl) ? C->CameraToControl->Filmback.SensorWidth : 35.6f; })
+		.OnValueChanged_Lambda([GC](float V) { auto* C = GC(); if (C && C->CameraToControl) { auto F = C->CameraToControl->Filmback; F.SensorWidth = V; C->CameraToControl->Filmback = F; } })]]
+
+		// Sensor Height
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("SHt", "Sensor Height (mm)"))]
+		+ SHorizontalBox::Slot().FillWidth(0.6f)
+		[SNew(SSpinBox<float>).MinValue(1).MaxValue(100).Delta(0.01f).MinFractionalDigits(2).MaxFractionalDigits(3)
+		.Value_Lambda([GC]() -> float { auto* C = GC(); return (C && C->CameraToControl) ? C->CameraToControl->Filmback.SensorHeight : 23.8f; })
+		.OnValueChanged_Lambda([GC](float V) { auto* C = GC(); if (C && C->CameraToControl) { auto F = C->CameraToControl->Filmback; F.SensorHeight = V; C->CameraToControl->Filmback = F; } })]]
+
+		// ===== LIVE TRACKING DATA (read-only from FreeD) =====
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 15, 0, 5)[SNew(SSeparator)]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
+		[SNew(STextBlock).Text(LOCTEXT("LTD", "Live Tracking Data")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))]
+
+		// Position & Rotation
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Pan", "Pan (Yaw)"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%.3f\xB0"), GF().Pan)) : LOCTEXT("D", "--"); }, Live)]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Tilt", "Tilt (Pitch)"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%.3f\xB0"), GF().Tilt)) : LOCTEXT("D", "--"); }, Live)]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Roll", "Roll"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%.3f\xB0"), GF().Roll)) : LOCTEXT("D", "--"); }, Live)]
@@ -272,35 +307,32 @@ TSharedRef<SDockTab> FDobotLiveLinkEditorModule::OnSpawnTab(const FSpawnTabArgs&
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Y", "Y (mm)"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%.1f"), GF().PosY_mm)) : LOCTEXT("D", "--"); }, Live)]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Z", "Z (mm)"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%.1f"), GF().PosZ_mm)) : LOCTEXT("D", "--"); }, Live)]
 
-		// ===== LENS DATA (read-only from FreeD) =====
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 15, 0, 5)[SNew(SSeparator)]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
-		[SNew(STextBlock).Text(LOCTEXT("LD", "Lens Data")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))]
-
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("FL", "Focal Length"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%d"), GF().ZoomRaw)) : LOCTEXT("D", "--"); }, Live)]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("Ap", "Aperture"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%d"), GF().IrisRaw)) : LOCTEXT("D", "--"); }, Live)]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)[DataRow(LOCTEXT("FD", "Focus Distance"), [GF, Live]() { return Live() ? FText::FromString(FString::Printf(TEXT("%d"), GF().FocusRaw)) : LOCTEXT("D", "--"); }, Live)]
-
-		// ===== SENSOR (editable) =====
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 15, 0, 5)[SNew(SSeparator)]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 5)
-		[SNew(STextBlock).Text(LOCTEXT("SH", "Sensor")).Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))]
+		// Lens Data
+		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[DataRow(LOCTEXT("Ap", "Aperture"), [GF, Live]()
+			{
+				if (!Live()) return LOCTEXT("D", "--");
+				auto F = GF();
+				return (F.Aperture > 0) ? FText::FromString(FString::Printf(TEXT("t/%.1f"), F.Aperture)) : LOCTEXT("D", "--");
+			}, Live)]
 
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
-		[SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("SW", "Width (mm)"))]
-		+ SHorizontalBox::Slot().FillWidth(0.6f)
-		[SNew(SSpinBox<float>).MinValue(1).MaxValue(100).Delta(0.01f).MinFractionalDigits(2).MaxFractionalDigits(3)
-		.Value_Lambda([GC]() -> float { auto* C = GC(); return (C && C->CameraToControl) ? C->CameraToControl->Filmback.SensorWidth : 35.6f; })
-		.OnValueChanged_Lambda([GC](float V) { auto* C = GC(); if (C && C->CameraToControl) { auto F = C->CameraToControl->Filmback; F.SensorWidth = V; C->CameraToControl->Filmback = F; } })]]
+		[DataRow(LOCTEXT("FD", "Focus Distance"), [GF, Live]()
+			{
+				if (!Live()) return LOCTEXT("D", "--");
+				auto F = GF();
+				if (F.FocusDistance_cm <= 0) return LOCTEXT("D", "--");
+				if (F.FocusDistance_cm >= 100.0f) return FText::FromString(FString::Printf(TEXT("%.2f m"), F.FocusDistance_cm / 100.0f));
+				return FText::FromString(FString::Printf(TEXT("%.1f cm"), F.FocusDistance_cm));
+			}, Live)]
 
-		+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
-		[SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot().FillWidth(0.4f).VAlign(VAlign_Center)[SNew(STextBlock).Text(LOCTEXT("SHt", "Height (mm)"))]
-		+ SHorizontalBox::Slot().FillWidth(0.6f)
-		[SNew(SSpinBox<float>).MinValue(1).MaxValue(100).Delta(0.01f).MinFractionalDigits(2).MaxFractionalDigits(3)
-		.Value_Lambda([GC]() -> float { auto* C = GC(); return (C && C->CameraToControl) ? C->CameraToControl->Filmback.SensorHeight : 23.8f; })
-		.OnValueChanged_Lambda([GC](float V) { auto* C = GC(); if (C && C->CameraToControl) { auto F = C->CameraToControl->Filmback; F.SensorHeight = V; C->CameraToControl->Filmback = F; } })]]
+	+ SVerticalBox::Slot().AutoHeight().Padding(0, 2)
+		[DataRow(LOCTEXT("FL2", "Focal Length"), [GF, Live]()
+			{
+				if (!Live()) return LOCTEXT("D", "--");
+				auto F = GF();
+				return (F.FocalLength_mm > 0) ? FText::FromString(FString::Printf(TEXT("%.1f mm"), F.FocalLength_mm)) : LOCTEXT("D", "--");
+			}, Live)]
 
 		// ===== DECKLINK =====
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, 15, 0, 5)[SNew(SSeparator)]

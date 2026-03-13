@@ -169,7 +169,45 @@ bool FDobotLiveLinkSource::ParseFreeDPacket(const TArray<uint8>& P)
 	LatestFrame.FocusRaw = DecodeFreeDInt24(&P[23]);
 	LatestFrame.IrisRaw = (int32)P[26];
 
+	// Decode lens values (True Value mode: same fixed-point as rotation, /32768)
+	// Zoom: focal length in mm (0 = no zoom motor / prime lens)
+	float ZoomDecoded = (float)LatestFrame.ZoomRaw * RS;  // RS = 1/32768
+	LatestFrame.FocalLength_mm = (ZoomDecoded > 0.0f) ? ZoomDecoded : 0.0f;
+
+	// Focus: distance in meters from Lensmaster (Metric mode), convert to cm for UE
+	float FocusDecoded = (float)LatestFrame.FocusRaw * RS;  // meters
+	LatestFrame.FocusDistance_cm = (FocusDecoded > 0.0f) ? FocusDecoded * 100.0f : 0.0f;  // m -> cm
+
+	// Iris: byte 26. In True Value mode, likely t-stop * some scale.
+	// Common encodings: raw 0-255 where value/10 = t-stop, or value directly.
+	// We store the decoded value; if it's in a plausible f-stop range, use it.
+	if (LatestFrame.IrisRaw > 0)
+	{
+		// Try /10 first (t-stop * 10 in a single byte)
+		float IrisTry = (float)LatestFrame.IrisRaw / 10.0f;
+		if (IrisTry >= 0.7f && IrisTry <= 64.0f)
+			LatestFrame.Aperture = IrisTry;
+		else
+			LatestFrame.Aperture = (float)LatestFrame.IrisRaw;  // store raw, let user interpret
+	}
+	else
+	{
+		LatestFrame.Aperture = 0.0f;
+	}
+
 	PacketCountThisSecond++;
+
+	// Debug first packets with decoded values
+	static int32 DbgCount = 0;
+	if (DbgCount < 5)
+	{
+		UE_LOG(LogTemp, Log, TEXT("FreeD: Pan=%.2f Tilt=%.2f Roll=%.2f | X=%.0f Y=%.0f Z=%.0f mm | FL=%.1fmm Focus=%.0fcm Iris=%.1f (raw Z=%d F=%d I=%d)"),
+			LatestFrame.Pan, LatestFrame.Tilt, LatestFrame.Roll,
+			LatestFrame.PosX_mm, LatestFrame.PosY_mm, LatestFrame.PosZ_mm,
+			LatestFrame.FocalLength_mm, LatestFrame.FocusDistance_cm, LatestFrame.Aperture,
+			LatestFrame.ZoomRaw, LatestFrame.FocusRaw, LatestFrame.IrisRaw);
+		DbgCount++;
+	}
 
 	FVector Loc(LatestFrame.PosY_mm / 10.0f, LatestFrame.PosX_mm / 10.0f, LatestFrame.PosZ_mm / 10.0f);
 	FRotator Rot(-LatestFrame.Tilt, LatestFrame.Pan, -LatestFrame.Roll);

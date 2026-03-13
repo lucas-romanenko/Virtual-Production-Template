@@ -184,9 +184,24 @@ void UDobotLiveLinkCameraComponent::TickComponent(float DeltaTime, ELevelTick Ti
 		return;
 	}
 
-	// Push lens data to source (so LiveLink frame has real values)
+	// Apply decoded FreeD lens data to camera and push to source
 	if (bIsRobotConnected && CameraToControl && ConnectedSource.IsValid())
 	{
+		FFreeDFrameData Frame = ConnectedSource->GetLatestFrame();
+
+		// Focal length: use FreeD value if non-zero, otherwise keep current (manual)
+		if (Frame.FocalLength_mm > 0.0f)
+			CameraToControl->CurrentFocalLength = Frame.FocalLength_mm;
+
+		// Aperture: use FreeD value if non-zero
+		if (Frame.Aperture > 0.0f)
+			CameraToControl->CurrentAperture = Frame.Aperture;
+
+		// Focus distance: use FreeD value if non-zero (already in cm)
+		if (Frame.FocusDistance_cm > 0.0f)
+			CameraToControl->FocusSettings.ManualFocusDistance = Frame.FocusDistance_cm;
+
+		// Push current camera values to source for LiveLink frame data
 		ConnectedSource->SetMappedLensData(
 			CameraToControl->CurrentFocalLength,
 			CameraToControl->CurrentAperture,
@@ -210,11 +225,6 @@ void UDobotLiveLinkCameraComponent::TickComponent(float DeltaTime, ELevelTick Ti
 		if (CD)
 		{
 			FTransform RT = CD->Transform;
-
-			// Apply lens from FreeD
-			if (CD->FocalLength > 0) CameraToControl->CurrentFocalLength = CD->FocalLength;
-			if (CD->Aperture > 0) CameraToControl->CurrentAperture = CD->Aperture;
-			if (CD->FocusDistance > 0) CameraToControl->FocusSettings.ManualFocusDistance = CD->FocusDistance;
 
 			if (!bHasRecordedStart)
 			{
